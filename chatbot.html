@@ -199,31 +199,27 @@
 
         // Send message functionality
         sendButton.addEventListener("click", async function() {
-            const userMessage = userInput.value;
+    const userMessage = userInput.value.trim();
 
-            if (userMessage.trim()) {
-                // Add user message to the chat
-                appendMessage(userMessage, "user");
+    if (userMessage) {
+        appendMessage(userMessage, "user");
+        userInput.value = ''; // Clear input box
 
-                // Clear the input box after sending
-                userInput.value = '';
+        try {
+            const response = await fetch("http://127.0.0.1:5000/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: userMessage })
+            });
 
-                // Call your backend API to get the bot's response
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ message: userMessage })
-                });
+            const botMessage = await response.text(); // Get plain text response
+            appendMessage(botMessage, "bot");
 
-                const data = await response.json();
-                const botMessage = data.reply;
-
-                // Add bot response to the chat, rendering as HTML
-                appendMessage(botMessage, "bot", true);
-            }
-        });
+        } catch (error) {
+            appendMessage("Error: Server is not responding", "bot");
+        }
+    }
+});
 
         // Allow pressing Enter to send the message
         userInput.addEventListener("keypress", function(event) {
