@@ -1,72 +1,180 @@
-# Morphie-Bot
+# 🤖 Morphie-Bot
 
-Morphie is an AI-powered chatbot designed to assist users in generating website design ideas, color suggestions, and layout options based on user input. It leverages Mistral AI to analyze queries and provide structured responses.
+Morphie is an **AI-powered design copilot** that helps users generate **website design themes**, including **color palettes and layout ideas**, through a clean chat-based interface.
 
-## Features
-- **Website Design Assistance**: Provides suggestions for website themes, color palettes, and layouts.
-- **Smart Responses**: Responds only when queries match predefined design-related categories.
-- **Interactive UI**: A responsive chatbot interface for seamless interaction.
-- **Powerful Backend**: Uses Mistral AI for intelligent recommendations.
+Unlike basic chatbots, Morphie supports **two intelligent modes** — **Chat Mode** and **Design Mode** — giving users full control over how the AI behaves.
 
-## Technologies Used
-- **Frontend**: HTML, CSS, JavaScript
-- **Backend**: Python (Flask)
-- **Database**: JSON-based storage
-- **AI Model**: Mistral AI
-
-## Installation
-
-### Prerequisites
-- Python 3.8+
-- Flask
-- Mistral AI API Key
-
-### Setup
-1. Clone the repository:
-   ```sh
-   git clone https://github.com/yourusername/Morphie-Bot.git
-   cd Morphie-Bot
-   ```
-
-2. Create a virtual environment and install dependencies:
-   ```sh
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   pip install -r requirements.txt
-   ```
-
-3. Set up environment variables:
-   - Create a `.env` file and add your Mistral API key:
-     ```env
-     MISTRAL_API_KEY="your API key"
-     ```
-
-4. Run the application:
-   ```sh
-   python app.py
-   ```
-
-5. Open the chatbot interface in your browser:
-   ```
-   http://localhost:5000
-   ```
-
-## Usage
-- Enter a website type (e.g., "e-commerce", "portfolio") to get suggested colors and layouts.
-- Request specific color palettes or layouts separately.
-- If the input does not match the predefined categories, Morphie will not respond.
-
-## File Structure
-```
-├── .env               # API Key storage
-├── app.py             # Backend Flask application
-├── chatbot.html       # Chatbot UI
-```
-
-## Future Enhancements
-- Implement real-time chat support.
-- Add more customization options for website themes.
-- Improve response generation with machine learning models.
+Powered by **Mistral AI** and built with **Flask**, Morphie focuses on **structured, usable design output** rather than random text generation.
 
 ---
-Feel free to contribute or submit pull requests!
+
+## ✨ Key Features
+
+### 💬 Chat Mode
+
+* Natural conversational AI
+* Handles greetings, casual questions, and general discussion
+* Does **not** generate design themes
+* Useful for ideation and clarification
+
+### 🎨 Design Mode
+
+* Generates **structured website themes**
+* Returns:
+
+  * 🎨 Primary / Secondary / Accent color palettes
+  * 🧩 Layout suggestions
+* Visual output (color swatches + labels)
+* No raw JSON exposed to the user
+
+### 🧠 Smart Mode Memory
+
+* Remembers the active mode per session
+* Switching modes preserves conversation history per mode
+* Prevents accidental theme generation
+
+### 🖥️ Interactive UI
+
+* Modern, responsive chatbot interface
+* Mode toggle buttons with active states
+* Smooth animations and loading indicators
+
+---
+
+## 🛠️ Tech Stack
+
+* **Frontend**: HTML, CSS, JavaScript
+* **Backend**: Python (Flask)
+* **AI Model**: Mistral AI
+* **Session Management**: Flask Sessions
+* **Environment Config**: python-dotenv
+
+---
+
+## 📦 Installation & Setup
+
+### Prerequisites
+
+* Python **3.8+**
+* Mistral AI API Key
+
+---
+
+### 1️⃣ Clone the Repository
+
+```sh
+git clone https://github.com/yourusername/Morphie-Bot.git
+cd Morphie-Bot
+```
+
+---
+
+### 2️⃣ Create Virtual Environment & Install Dependencies
+
+```sh
+python -m venv venv
+
+# macOS / Linux
+source venv/bin/activate
+
+# Windows
+venv\Scripts\activate
+
+pip install -r requirements.txt
+```
+
+---
+
+### 3️⃣ Configure Environment Variables
+
+Create a `.env` file in the project root:
+
+```env
+MISTRAL_API_KEY=your_api_key_here
+```
+
+---
+
+### 4️⃣ Run the Application
+
+```sh
+python app.py
+```
+
+---
+
+### 5️⃣ Open in Browser
+
+```
+http://127.0.0.1:5000
+```
+
+---
+
+## 🧪 How to Use
+
+### Switching Modes
+
+* Click **💬 Chat** for normal conversation
+* Click **🎨 Design** to generate website themes
+* Or type:
+
+  * `chat mode`
+  * `design mode`
+
+### Generate a Design (Design Mode)
+
+Example prompts:
+
+```
+design for ecommerce website
+portfolio website theme
+gaming website UI
+```
+
+### Chat Freely (Chat Mode)
+
+Example prompts:
+
+```
+hey
+how are you
+tell me an idea
+```
+
+---
+
+## 📁 Project Structure
+
+```
+├── .env                # Environment variables
+├── app.py              # Flask backend
+├── templates/
+│   └── chatbot.html    # Frontend UI
+├── requirements.txt    # Python dependencies
+└── README.md
+```
+
+---
+
+## 🚀 Future Improvements
+
+* Theme refinement (change only accent / layout)
+* Export themes as CSS variables
+* Save themes per user
+* Multi-step design wizard
+* Persistent user sessions
+
+---
+
+## 👤 Author
+
+**Archit Aggarwal**
+GitHub: [https://github.com/architaggarwal24](https://github.com/architaggarwal24)
+LinkedIn: [https://linkedin.com/in/architaggarwal24](https://linkedin.com/in/architaggarwal24)
+
+---
+
+## ⭐ Support
+
+If you found Morphie useful or learned something from it, consider giving the repository a ⭐ — it really helps!
