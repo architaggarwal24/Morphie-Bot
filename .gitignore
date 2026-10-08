@@ -1,0 +1,34 @@
+# ---- Secrets: never commit these -------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---- Local runtime data ----------------------------------------------------
+# Uploaded documents, the search index, and the generated session secret.
+data/
+*.sqlite3
+*.sqlite3-journal
+*.db
+
+# ---- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# ---- Tests / tooling -------------------------------------------------------
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Editors / OS ----------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

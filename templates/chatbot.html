@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Morphie-Bot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
+</head>
+<body>
+
+<div id="shell">
+
+  <!-- SIDEBAR -->
+  <aside id="sidebar" class="mp-scroll">
+    <div class="mp-brand"><span class="mp-brand__mark">✨</span> MORPHIE-BOT</div>
+
+    <button id="newChatBtn" class="mp-newchat" type="button">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 5v14M5 12h14" />
+      </svg>
+      New chat
+    </button>
+
+    <nav class="mp-nav" aria-label="Main">
+      <button id="chatBtn" type="button" class="mp-nav-item" aria-pressed="true">💬 Chat</button>
+      <button id="docsBtn" type="button" class="mp-nav-item" aria-pressed="false" title="Upload and manage your documents">📄 Documents</button>
+    </nav>
+
+    <div class="mp-sidebar-foot">
+      <!-- Read-only: the provider is chosen in .env (LLM_PROVIDER). Filled in from GET /status. -->
+      <div id="providerBadge" class="mp-provider-badge" title="Set LLM_PROVIDER in .env to change the model provider">
+        <span class="mp-provider-badge__dot"></span>
+        <span id="providerBadgeName" class="mp-provider-badge__name">…</span>
+      </div>
+      <button id="themeToggleBtn" type="button" class="mp-theme-toggle" aria-label="Toggle light / dark theme" title="Toggle light / dark theme">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      </button>
+    </div>
+  </aside>
+  <div id="sidebarScrim"></div>
+
+  <!-- MAIN COLUMN -->
+  <div id="mainColumn">
+    <header id="chatHeader">
+      <button id="sidebarToggleBtn" type="button" class="mp-header-btn" aria-label="Menu">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+      <span class="mp-header-title">Morphie-Bot</span>
+      <span class="mp-header-sub">Chat · Documents · Tools</span>
+      <span class="mp-header-spacer"></span>
+    </header>
+
+    <main id="chat" class="mp-scroll"></main>
+
+    <div id="composerWrap">
+      <div id="composer">
+        <textarea id="input" rows="1" placeholder="Ask Morphie anything…"></textarea>
+        <button id="sendBtn" type="button" class="mp-composer-btn" aria-label="Send"></button>
+      </div>
+      <p class="mp-composer-hint">Morphie picks the right tool itself: calculator, clock, web search, or your documents.</p>
+    </div>
+  </div>
+
+  <!-- SIDE PANEL: Documents -->
+  <aside id="workspace" class="mp-scroll">
+
+    <section id="docsPanel" class="mp-panel-block">
+      <div class="mp-panel-head">
+        <h2>📄 Documents</h2>
+        <span class="mp-header-spacer"></span>
+        <button type="button" class="mp-panel-close" aria-label="Close">✕</button>
+      </div>
+      <div class="mp-panel-body">
+        <div id="dropzone" class="mp-dropzone">
+          <strong>Drop a file here, or click to upload</strong>
+          <span>PDF, DOCX, TXT, CSV, JSON</span>
+        </div>
+        <input type="file" id="fileInput" accept=".pdf,.txt,.docx,.csv,.json" hidden />
+        <button id="uploadBtn" type="button" class="mp-btn mp-btn--primary mp-btn--block">Upload a file</button>
+        <div id="uploadStatus" class="mp-status-line" style="margin-top:8px"></div>
+
+        <label class="mp-switch-row">
+          <span>Ask about all documents</span>
+          <input type="checkbox" id="allDocsToggle" checked />
+        </label>
+
+        <div class="mp-section-title">Your documents</div>
+        <div id="docsList"></div>
+      </div>
+    </section>
+
+  </aside>
+
+</div><!-- /shell -->
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
