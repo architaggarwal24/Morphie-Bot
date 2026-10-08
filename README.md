@@ -32,7 +32,7 @@ python app.py
 
 **Windows (PowerShell)**
 ```powershell
-git clone https://github.com/YOUR-USERNAME/morphie-bot.git
+git clone https://github.com/architaggarwal24/morphie-bot.git
 cd morphie-bot
 python -m venv .venv
 .venv\Scripts\Activate.ps1     # if blocked: Set-ExecutionPolicy -Scope Process Bypass
