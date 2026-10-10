@@ -2,7 +2,7 @@
 
 > A small, readable AI assistant you can run in five minutes: **chat**, **a basic tool-using agent**, and **document Q&A (RAG)**, built with Flask and plain JavaScript.
 
-Morphie-Bot is the **parent project**. It stays deliberately small so the core ideas are easy to read end to end: how a model calls tools, how documents become searchable, how a chat UI shows an agent working. Its more ambitious descendant, **[Morphie](https://github.com/YOUR-USERNAME/morphie)**, takes the agent idea much further (see [Morphie-Bot → Morphie](#morphie-bot--morphie)).
+Morphie-Bot is the **parent project**. It stays deliberately small so the core ideas are easy to read end to end: how a model calls tools, how documents become searchable, how a chat UI shows an agent working. Its more ambitious descendant, **[Morphie](https://github.com/architaggarwal24/morphie)**, takes the agent idea much further (see [Morphie-Bot → Morphie](#morphie-bot--morphie)).
 
 ## What it does
 
@@ -22,7 +22,7 @@ You need **Python 3.10 or newer** (developed and tested on 3.12) and an API key 
 
 **macOS / Linux**
 ```bash
-git clone https://github.com/YOUR-USERNAME/morphie-bot.git
+git clone https://github.com/architaggarwal24/morphie-bot.git
 cd morphie-bot
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -32,7 +32,7 @@ python src/app.py
 
 **Windows (PowerShell)**
 ```powershell
-git clone https://github.com/YOUR-USERNAME/morphie-bot.git
+git clone https://github.com/architaggarwal24/morphie-bot.git
 cd morphie-bot
 python -m venv .venv
 .venv\Scripts\Activate.ps1     # if blocked: Set-ExecutionPolicy -Scope Process Bypass
@@ -258,7 +258,7 @@ Stated plainly, since this is a learning-sized project:
 
 ## Morphie-Bot → Morphie
 
-Morphie-Bot is the foundation; **[Morphie](https://github.com/YOUR-USERNAME/morphie)** is the child project that grows its agent idea into a complete product, rebuilt in **Next.js + React + TypeScript** with the backend built in.
+Morphie-Bot is the foundation; **[Morphie](https://github.com/architaggarwal24/morphie)** is the child project that grows its agent idea into a complete product, rebuilt in **Next.js + React + TypeScript** with the backend built in.
 
 | | **Morphie-Bot** (this repo) | **Morphie** |
 |---|---|---|
