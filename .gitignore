@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Cloudflare tooling
+.wrangler/
+.venv-workers/
+python_modules/
+pylock.toml
+node_modules/
+
+# secrets and local data (never commit these)
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+!.env.example
+!.dev.vars.example
+data/
+src/data/
+
+# logs, editors, OS
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

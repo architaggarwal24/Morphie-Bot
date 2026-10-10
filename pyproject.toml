@@ -1,0 +1,20 @@
+[project]
+name = "morphie-bot"
+version = "1.0.0"
+description = "Morphie-Bot: chat, a small tool-using agent and document Q&A, on Flask. Runs locally or on Cloudflare Workers."
+requires-python = ">=3.12"
+# What the *Worker* needs (pure-Python or Pyodide-provided). `requests` is deliberately absent: it cannot open
+# sockets in Pyodide, so morphie/net.py uses fetch() there. For local development use requirements.txt.
+dependencies = [
+    "flask>=3.0,<4",
+    "python-dotenv>=1.0,<2",
+    "pypdf>=5.0,<6",
+    "python-docx>=1.1,<2",
+    "tzdata",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+]
