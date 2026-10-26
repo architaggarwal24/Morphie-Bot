@@ -2,6 +2,8 @@
 
 > A small, readable AI assistant you can run in five minutes: **chat**, **a basic tool-using agent**, and **document Q&A (RAG)**, built with Flask and plain JavaScript.
 
+**🔗 Live demo:** https://morphie-bot.architarwl123.workers.dev (bring your own Mistral or OpenAI key; see [Deploying to Cloudflare](#deploying-to-cloudflare))
+
 Morphie-Bot is the **parent project**. It stays deliberately small so the core ideas are easy to read end to end: how a model calls tools, how documents become searchable, how a chat UI shows an agent working. Its more ambitious descendant, **[Morphie](https://github.com/architaggarwal24/morphie)**, takes the agent idea much further (see [Morphie-Bot → Morphie](#morphie-bot--morphie)).
 
 ## What it does
@@ -271,3 +273,7 @@ Morphie-Bot is the foundation; **[Morphie](https://github.com/architaggarwal24/m
 | Extras | – | Long-term memory, Design studio (HTML/React export), searchable chat history |
 
 Start here to understand the fundamentals; move to Morphie for the complete experience.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

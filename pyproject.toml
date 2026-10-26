@@ -1,6 +1,7 @@
 [project]
 name = "morphie-bot"
 version = "1.0.0"
+license = "MIT"
 description = "Morphie-Bot: chat, a small tool-using agent and document Q&A, on Flask. Runs locally or on Cloudflare Workers."
 requires-python = ">=3.12"
 # What the *Worker* needs (pure-Python or Pyodide-provided). `requests` is deliberately absent: it cannot open
