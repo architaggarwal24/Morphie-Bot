@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Morphie-Bot</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}" />
 </head>
@@ -14,12 +14,14 @@
   <aside id="sidebar" class="mp-scroll">
     <div class="mp-brand"><span class="mp-brand__mark">✨</span> MORPHIE-BOT</div>
 
-    <button id="newChatBtn" class="mp-newchat" type="button">
+    <button id="newChatBtn" class="mp-newchat" type="button" data-shortcut="newChat" data-shortcut-badge>
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 5v14M5 12h14" />
       </svg>
       New chat
     </button>
+
+    <button id="cmdBtn" type="button" class="mp-nav-item mp-nav-item--search" aria-haspopup="dialog" title="Search every page and action" data-shortcut="commandMenu" data-shortcut-badge>🔍 Search…</button>
 
     <nav class="mp-nav" aria-label="Main">
       <button id="chatBtn" type="button" class="mp-nav-item" aria-pressed="true">💬 Chat</button>
@@ -139,6 +141,15 @@
         <button id="settingsSaveBtn" type="submit" class="mp-btn mp-btn--primary">Save</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- COMMAND MENU: Cmd/Ctrl+K. A search over every page and action, usable with the keyboard alone. -->
+<div id="commandMenu" class="mp-modal mp-cmd" role="dialog" aria-modal="true" aria-label="Command menu" hidden>
+  <div class="mp-cmd__card">
+    <input id="cmdInput" class="mp-cmd__input" type="text" role="combobox" aria-expanded="true" aria-controls="cmdList" aria-autocomplete="list" aria-label="Search pages and actions" placeholder="Search pages and actions…" autocomplete="off" spellcheck="false" />
+    <ul id="cmdList" class="mp-cmd__list mp-scroll" role="listbox" aria-label="Pages and actions"></ul>
+    <div id="cmdEmpty" class="mp-cmd__empty" role="status" hidden>Nothing matches that.</div>
   </div>
 </div>
 

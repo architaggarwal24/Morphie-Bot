@@ -67,6 +67,11 @@
 }
 
 * { box-sizing: border-box; }
+
+/* Short titles break into even lines; running text avoids a lonely last word. Chat bubbles are left alone on
+   purpose: their text arrives token by token and `pretty` would re-flow the last lines as it grows. */
+h1, h2, h3, h4 { text-wrap: balance; }
+p, .mp-modal__note, .mp-composer-hint, .mp-hint, .mp-field__hint, .mp-list-empty { text-wrap: pretty; }
 /* An author `display` rule beats the browser's default `[hidden]{display:none}`,
    silently un-hiding anything toggled via the `hidden` attribute/property.
    Restore it as an override. */
@@ -107,7 +112,9 @@ a { color: inherit; }
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 16px 12px;
+  /* clear of the notch / home indicator when it slides in over a phone */
+  padding: max(16px, env(safe-area-inset-top, 0px)) 12px max(16px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
+  overflow-y: auto; /* short landscape phones: the footer scrolls into reach instead of being cut off */
   background: var(--mp-bg-inset);
   border-right: 1px solid var(--mp-border);
 }
@@ -122,14 +129,14 @@ a { color: inherit; }
 }
 .mp-brand__mark {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; border-radius: var(--mp-radius-sm);
+  width: 26px; height: 26px; border-radius: var(--mp-radius-sm); corner-shape: squircle;
   background: linear-gradient(155deg, var(--mp-accent), var(--mp-accent-strong));
   color: var(--mp-on-accent); font-size: 14px; flex: 0 0 auto;
 }
 .mp-newchat {
   display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 9px 12px; margin-bottom: 14px;
-  border: 1px solid var(--mp-border-strong); border-radius: var(--mp-radius-md);
+  border: 1px solid var(--mp-border-strong); border-radius: var(--mp-radius-md); corner-shape: squircle;
   background: var(--mp-surface); color: var(--mp-text);
   font-size: 13px; font-weight: 600; cursor: pointer;
   transition: background 0.15s var(--mp-ease), border-color 0.15s var(--mp-ease);
@@ -138,9 +145,10 @@ a { color: inherit; }
 .mp-newchat svg { flex: 0 0 auto; }
 
 .mp-nav { display: flex; flex-direction: column; gap: 2px; }
+.mp-nav-item--search { margin-bottom: 10px; border: 1px solid var(--mp-border); background: var(--mp-surface); }
 .mp-nav-item {
   display: flex; align-items: center; gap: 10px;
-  width: 100%; padding: 9px 10px; border: 0; border-radius: var(--mp-radius-sm);
+  width: 100%; padding: 9px 10px; border: 0; border-radius: var(--mp-radius-sm); corner-shape: squircle;
   background: transparent; color: var(--mp-text-muted);
   font-size: 13.5px; font-weight: 500; text-align: left; cursor: pointer;
   transition: background 0.12s var(--mp-ease), color 0.12s var(--mp-ease);
@@ -153,7 +161,7 @@ a { color: inherit; }
 .mp-sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 10px; }
 .mp-provider-badge {
   display: flex; align-items: center; gap: 8px; padding: 7px 10px;
-  border-radius: var(--mp-radius-md); background: var(--mp-surface);
+  border-radius: var(--mp-radius-md); corner-shape: squircle; background: var(--mp-surface);
   border: 1px solid var(--mp-border); font-size: 11.5px; color: var(--mp-text-muted);
   cursor: pointer; text-align: left; font-family: var(--mp-font-mono);
 }
@@ -166,7 +174,7 @@ a { color: inherit; }
 
 .mp-theme-toggle {
   display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 7px; border-radius: var(--mp-radius-md); border: 1px solid var(--mp-border);
+  padding: 7px; border-radius: var(--mp-radius-md); corner-shape: squircle; border: 1px solid var(--mp-border);
   background: var(--mp-surface); cursor: pointer; color: var(--mp-text-muted);
 }
 .mp-theme-toggle:hover { color: var(--mp-text); }
@@ -177,7 +185,9 @@ a { color: inherit; }
 
 #chatHeader {
   flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
-  height: 52px; padding: 0 18px; border-bottom: 1px solid var(--mp-border);
+  height: calc(52px + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) max(18px, env(safe-area-inset-right, 0px)) 0 max(18px, env(safe-area-inset-left, 0px));
+  border-bottom: 1px solid var(--mp-border);
 }
 .mp-header-title { font-weight: 600; font-size: 13.5px; color: var(--mp-text); }
 .mp-header-sub { font-size: 12px; color: var(--mp-text-faint); }
@@ -185,7 +195,7 @@ a { color: inherit; }
 
 #chat {
   flex: 1 1 auto; min-height: 0; overflow-y: auto;
-  padding: 22px 0 12px;
+  padding: 22px env(safe-area-inset-right, 0px) 12px env(safe-area-inset-left, 0px); /* landscape: stay out of the notch sides */
 }
 .mp-thread { max-width: 720px; margin: 0 auto; padding: 0 22px; display: flex; flex-direction: column; gap: 18px; }
 
@@ -194,7 +204,7 @@ a { color: inherit; }
   display: flex; flex-direction: column; align-items: center; gap: 14px;
 }
 .mp-empty-chat__mark {
-  width: 46px; height: 46px; border-radius: var(--mp-radius-md);
+  width: 46px; height: 46px; border-radius: var(--mp-radius-md); corner-shape: squircle;
   background: linear-gradient(155deg, var(--mp-accent), var(--mp-accent-strong));
   display: flex; align-items: center; justify-content: center; color: var(--mp-on-accent); font-size: 22px;
 }
@@ -212,7 +222,7 @@ a { color: inherit; }
 .mp-row { display: flex; gap: 10px; align-items: flex-start; }
 .mp-row--user { flex-direction: row-reverse; }
 .mp-avatar {
-  flex: 0 0 26px; width: 26px; height: 26px; border-radius: var(--mp-radius-sm);
+  flex: 0 0 26px; width: 26px; height: 26px; border-radius: var(--mp-radius-sm); corner-shape: squircle;
   display: flex; align-items: center; justify-content: center; font-size: 13px; margin-top: 2px;
 }
 .mp-avatar--assistant { background: linear-gradient(155deg, var(--mp-accent), var(--mp-accent-strong)); color: var(--mp-on-accent); }
@@ -221,7 +231,7 @@ a { color: inherit; }
 .mp-row--user .mp-bubble-col { align-items: flex-end; }
 
 .mp-bubble {
-  padding: 10px 14px; border-radius: var(--mp-radius-lg); font-size: 14px; line-height: 1.58;
+  padding: 10px 14px; border-radius: var(--mp-radius-lg); corner-shape: squircle; font-size: 14px; line-height: 1.58;
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .mp-bubble--assistant { background: var(--mp-surface); border: 1px solid var(--mp-border); border-top-left-radius: 4px; }
@@ -262,11 +272,14 @@ a { color: inherit; }
 .mp-chip--off { opacity: 0.45; }
 
 /* ---- Composer ---- */
-#composerWrap { flex: 0 0 auto; padding: 12px 22px 18px; }
+#composerWrap {
+  flex: 0 0 auto;
+  padding: 12px max(22px, env(safe-area-inset-right, 0px)) max(18px, env(safe-area-inset-bottom, 0px)) max(22px, env(safe-area-inset-left, 0px));
+}
 #composer {
   max-width: 720px; margin: 0 auto;
   display: flex; align-items: flex-end; gap: 8px;
-  padding: 8px 8px 8px 16px; border-radius: var(--mp-radius-lg);
+  padding: 8px 8px 8px 16px; border-radius: var(--mp-radius-lg); corner-shape: squircle;
   background: var(--mp-surface); border: 1px solid var(--mp-border-strong);
   box-shadow: var(--mp-shadow);
 }
@@ -278,7 +291,7 @@ a { color: inherit; }
 #input:focus { outline: none; }
 .mp-composer-btn {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-  width: 34px; height: 34px; border-radius: var(--mp-radius-md); border: 0; cursor: pointer;
+  width: 34px; height: 34px; border-radius: var(--mp-radius-md); corner-shape: squircle; border: 0; cursor: pointer;
   background: var(--mp-accent); color: var(--mp-on-accent);
   transition: background 0.12s var(--mp-ease), opacity 0.12s;
 }
@@ -304,23 +317,28 @@ a { color: inherit; }
 
 .mp-panel-head {
   flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
-  height: 52px; padding: 0 16px; border-bottom: 1px solid var(--mp-border);
+  height: calc(52px + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
+  border-bottom: 1px solid var(--mp-border);
 }
 .mp-panel-head h2 { margin: 0; font-size: 13.5px; font-weight: 600; }
 .mp-panel-head .mp-header-spacer { flex: 1 1 auto; }
 .mp-panel-close {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; border-radius: var(--mp-radius-sm); border: 0;
+  width: 26px; height: 26px; border-radius: var(--mp-radius-sm); corner-shape: squircle; border: 0;
   background: transparent; color: var(--mp-text-faint); cursor: pointer;
 }
 .mp-panel-close:hover { background: var(--mp-surface); color: var(--mp-text); }
 
-.mp-panel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px; }
+.mp-panel-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 16px max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+}
 
 /* Generic controls (buttons, status lines, list items) used by the Documents panel */
 .mp-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 13px; border-radius: var(--mp-radius-md); border: 1px solid var(--mp-border-strong);
+  padding: 7px 13px; border-radius: var(--mp-radius-md); corner-shape: squircle; border: 1px solid var(--mp-border-strong);
   background: var(--mp-surface); color: var(--mp-text); font-size: 12.5px; font-weight: 600; cursor: pointer;
   transition: background 0.12s, border-color 0.12s, opacity 0.12s;
 }
@@ -344,14 +362,35 @@ a { color: inherit; }
   border-bottom: 1px solid var(--mp-border);
 }
 .mp-list-item:last-child { border-bottom: 0; }
+.mp-list-item__check { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
 .mp-list-item__body { flex: 1 1 auto; min-width: 0; }
 .mp-list-item__title { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .mp-list-item__meta { font-size: 11px; color: var(--mp-text-faint); margin-top: 2px; }
 .mp-list-empty { padding: 30px 10px; text-align: center; font-size: 12.5px; color: var(--mp-text-faint); }
 
+/* Loading skeleton: the real row (see buildDocRow in app.js) with its content painted as gray blocks. */
+.mp-list-item.is-skeleton { pointer-events: none; user-select: none; }
+.is-skeleton .mp-list-item__title,
+.is-skeleton .mp-btn,
+.is-skeleton .doc-checkbox {
+  color: transparent; border-color: transparent; border-radius: var(--mp-radius-sm); corner-shape: squircle;
+  background: linear-gradient(90deg, var(--mp-border) 25%, var(--mp-border-strong) 50%, var(--mp-border) 75%) 0 0 / 200% 100%;
+  animation: mp-shimmer 1.4s linear infinite;
+}
+.is-skeleton .mp-list-item__title { width: 62%; }
+.is-skeleton:nth-child(2) .mp-list-item__title { width: 48%; }
+.is-skeleton:nth-child(3) .mp-list-item__title { width: 71%; }
+.is-skeleton .doc-checkbox { appearance: none; -webkit-appearance: none; }
+@keyframes mp-shimmer { to { background-position: -200% 0; } }
+/* After the rule above on purpose: same specificity, so source order decides. */
+@media (prefers-reduced-motion: reduce) {
+  .is-skeleton .mp-list-item__title, .is-skeleton .mp-btn, .is-skeleton .doc-checkbox { animation: none; }
+}
+
+.mp-dropzone.is-busy { opacity: 0.6; pointer-events: none; }
 .mp-dropzone {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-  padding: 22px 14px; margin-bottom: 14px; border-radius: var(--mp-radius-md);
+  padding: 22px 14px; margin-bottom: 14px; border-radius: var(--mp-radius-md); corner-shape: squircle;
   border: 1.5px dashed var(--mp-border-strong); color: var(--mp-text-muted); font-size: 12.5px; text-align: center;
   cursor: pointer; transition: border-color 0.12s, color 0.12s;
 }
@@ -364,12 +403,27 @@ a { color: inherit; }
 }
 
 /* Toasts */
+.toast-stack {
+  position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 200;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  width: max-content; max-width: min(90vw, 420px); pointer-events: none;
+}
 .toast {
-  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 200;
-  max-width: min(90vw, 420px); padding: 10px 16px; border-radius: var(--mp-radius-md); font-size: 13px;
+  display: flex; align-items: center; gap: 14px; max-width: 100%; pointer-events: auto;
+  padding: 10px 16px; border-radius: var(--mp-radius-md); corner-shape: squircle; font-size: 13px;
   color: var(--mp-text); background: var(--mp-surface-raised); border: 1px solid var(--mp-border-strong);
   box-shadow: var(--mp-shadow);
+  /* A transition, not a keyframe animation: pressing Undo mid-fade just reverses it from where it is. */
+  opacity: 0; transform: translateY(8px);
+  transition: opacity 0.18s var(--mp-ease), transform 0.18s var(--mp-ease);
 }
+.toast.is-visible { opacity: 1; transform: none; }
+.toast__text { min-width: 0; overflow-wrap: anywhere; }
+.toast__action {
+  flex: 0 0 auto; padding: 4px 8px; border: 0; border-radius: var(--mp-radius-sm); corner-shape: squircle; background: transparent;
+  color: var(--mp-accent-soft); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.toast__action:hover { background: var(--mp-surface); }
 
 /* ---------------------------------------------------------------- */
 /* Responsive                                                         */
@@ -393,19 +447,65 @@ a { color: inherit; }
 
 .mp-header-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; border-radius: var(--mp-radius-sm); border: 0;
+  width: 30px; height: 30px; border-radius: var(--mp-radius-sm); corner-shape: squircle; border: 0;
   background: transparent; color: var(--mp-text-muted); cursor: pointer;
 }
 .mp-header-btn:hover { background: var(--mp-surface); color: var(--mp-text); }
 
 /* ---------------------------------------------------------------- */
+/* View transitions (same-page changes; see withTransition in app.js) */
+/* ---------------------------------------------------------------- */
+
+::view-transition-group(*) { animation-duration: 0.2s; animation-timing-function: var(--mp-ease); }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.2s; }
+/* Chromium ignores clicks while a transition plays (pointer-events does not change that; checked), so they stay
+   at 0.2s and are only used for one-shot actions: theme toggle, new chat, removing a document row. Never for typing,
+   streaming or scrolling. */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
+
+/* ---------------------------------------------------------------- */
+/* Command menu (Cmd/Ctrl+K)                                         */
+/* ---------------------------------------------------------------- */
+
+.mp-modal.mp-cmd { z-index: 70; align-items: flex-start; padding-top: max(min(14vh, 120px), env(safe-area-inset-top, 0px)); }
+.mp-cmd__card {
+  width: min(560px, 100%); max-height: min(70vh, 460px); display: flex; flex-direction: column; overflow: hidden;
+  border-radius: var(--mp-radius-lg); corner-shape: squircle; background: var(--mp-surface-raised);
+  border: 1px solid var(--mp-border-strong); box-shadow: var(--mp-shadow);
+}
+.mp-cmd__input {
+  flex: 0 0 auto; width: 100%; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--mp-border);
+  background: transparent; color: var(--mp-text); font: inherit; font-size: 14.5px;
+}
+.mp-cmd__input:focus { outline: none; }
+.mp-cmd__input::placeholder { color: var(--mp-text-faint); }
+.mp-cmd__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0; padding: 6px; list-style: none; }
+.mp-cmd__item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px;
+  border-radius: var(--mp-radius-sm); corner-shape: squircle; color: var(--mp-text-muted); font-size: 13.5px; cursor: pointer;
+}
+.mp-cmd__item[aria-selected="true"] { background: var(--mp-surface); color: var(--mp-text); box-shadow: inset 2px 0 0 var(--mp-accent); }
+.mp-cmd__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-kbd {
+  flex: 0 0 auto; margin-left: auto; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--mp-border-strong);
+  background: var(--mp-code-bg); color: var(--mp-text-faint); font-family: var(--mp-font-sans); font-size: 11px; line-height: 1.5; white-space: nowrap;
+}
+.mp-cmd__item[aria-selected="true"] .mp-kbd { color: var(--mp-text-muted); }
+.mp-cmd__empty { padding: 22px 16px; text-align: center; font-size: 13px; color: var(--mp-text-faint); }
+
+/* ---------------------------------------------------------------- */
 /* Settings dialog (bring your own key)                              */
 /* ---------------------------------------------------------------- */
 
-.mp-modal { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--mp-scrim); }
+.mp-modal {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: var(--mp-scrim);
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+}
 .mp-modal[hidden] { display: none; }
 .mp-modal__card {
-  width: min(440px, 100%); max-height: 100%; overflow-y: auto; border-radius: var(--mp-radius-lg);
+  width: min(440px, 100%); max-height: 100%; overflow-y: auto; border-radius: var(--mp-radius-lg); corner-shape: squircle;
   background: var(--mp-surface-raised); border: 1px solid var(--mp-border-strong); box-shadow: var(--mp-shadow);
 }
 .mp-modal__body { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
@@ -414,7 +514,30 @@ a { color: inherit; }
 .mp-field { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--mp-text); }
 .mp-field__hint { font-weight: 400; font-size: 11.5px; color: var(--mp-text-faint); }
 .mp-field select, .mp-field input[type="text"], .mp-field input[type="password"] {
-  width: 100%; padding: 9px 10px; border-radius: var(--mp-radius-sm); border: 1px solid var(--mp-border-strong);
+  width: 100%; padding: 9px 10px; border-radius: var(--mp-radius-sm); corner-shape: squircle; border: 1px solid var(--mp-border-strong);
   background: var(--mp-bg-inset); color: var(--mp-text); font: inherit; font-family: var(--mp-font-mono); font-size: 12.5px;
 }
 .mp-field select:focus, .mp-field input:focus { outline: 2px solid var(--mp-accent-soft); outline-offset: 1px; }
+
+/* ---------------------------------------------------------------- */
+/* Touch targets (hit slop)                                          */
+/* ---------------------------------------------------------------- */
+
+/* A finger needs 44pt on iOS and 48dp on Android, so touch screens get 48px for everything tappable. The icons
+   keep their size; the extra comes from min-width/min-height on the control itself (not an overlay), so
+   neighbouring targets can never overlap. Mouse and trackpad layouts are untouched. */
+@media (pointer: coarse) {
+  :root { --mp-tap: 48px; }
+
+  .mp-newchat, .mp-nav-item, .mp-provider-badge, .mp-theme-toggle, .mp-btn, .mp-suggestion, .mp-switch-row, .mp-cmd__item,
+  .mp-field select, .mp-field input[type="text"], .mp-field input[type="password"], #input {
+    min-height: var(--mp-tap);
+  }
+  .mp-header-btn, .mp-panel-close, .mp-composer-btn, .mp-btn--sm, .mp-list-item__check, .toast__action {
+    min-width: var(--mp-tap); min-height: var(--mp-tap);
+  }
+  .mp-btn--sm { justify-content: center; }
+  .mp-list-item { align-items: center; padding-block: 0; }
+  .doc-checkbox, .mp-switch-row input[type="checkbox"] { width: 22px; height: 22px; margin: 0; }
+  .toast { padding-block: 4px; }
+}

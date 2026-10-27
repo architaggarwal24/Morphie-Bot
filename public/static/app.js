@@ -55,10 +55,18 @@
     if (toggle) toggle.setAttribute("data-theme-now", effectiveTheme());
   }
 
+  // Runs a same-page DOM change inside a view transition (a short cross-fade; rows that kept their
+  // view-transition-name slide to their new place). Unsupported browsers and reduced-motion just apply the change.
+  function withTransition(update) {
+    var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!document.startViewTransition || reduced) { update(); return; }
+    document.startViewTransition(update);
+  }
+
   function toggleTheme() {
     var next = effectiveTheme() === "dark" ? "light" : "dark";
     if (storage) storage.setItem(THEME_KEY, next);
-    applyTheme(next);
+    withTransition(function () { applyTheme(next); });
   }
 
   // Dark unless the person has explicitly chosen light (persisted). No
@@ -86,11 +94,37 @@
     return { ok: res.ok, status: res.status, data: data, message: message };
   }
 
-  function showToast(message) {
-    var toast = el("div", "toast", message);
+  var UNDO_MS = 6000; // how long an Undo toast (and the delayed request behind it) lasts
+  var toastStack = null;
+
+  // showToast(text) or showToast(text, { action: { label, onClick }, duration }). Returns { dismiss }.
+  // role="status": screen readers announce it politely, without stealing focus.
+  function showToast(message, options) {
+    options = options || {};
+    if (!toastStack) { toastStack = el("div", "toast-stack"); document.body.appendChild(toastStack); }
+    var toast = el("div", "toast");
     toast.setAttribute("role", "status");
-    document.body.appendChild(toast);
-    setTimeout(function () { toast.remove(); }, 4500);
+    toastStack.appendChild(toast); // in the page first, content second: live regions announce what is added to them
+    var timer = null;
+
+    function dismiss() {
+      clearTimeout(timer);
+      toast.classList.remove("is-visible");
+      setTimeout(function () { toast.remove(); }, 220);
+    }
+
+    setTimeout(function () {
+      toast.appendChild(el("span", "toast__text", message));
+      if (options.action) {
+        var button = el("button", "toast__action", options.action.label);
+        button.type = "button";
+        button.addEventListener("click", function () { dismiss(); options.action.onClick(); });
+        toast.appendChild(button);
+      }
+      toast.classList.add("is-visible");
+    }, 30);
+    timer = setTimeout(dismiss, options.duration || 4500);
+    return { dismiss: dismiss };
   }
 
   // ---------------------------------------------------------------- //
@@ -314,15 +348,21 @@
   });
 
   document.getElementById("settingsClearBtn").addEventListener("click", function () {
+    var previous = loadLlm();                                       // kept in memory only for the length of the Undo toast
+    var wasRemembered = !!(storage && storage.getItem(LLM_KEY));
     clearLlm();
     llmKey.value = "";
     closeSettings();
-    showToast("Your key was removed from this browser.");
+    showToast("Your key was removed from this browser.", previous ? {
+      duration: UNDO_MS,
+      action: { label: "Undo", onClick: function () { saveLlm(previous, wasRemembered); showToast("Your key is back."); loadStatus(); } },
+    } : undefined);
     loadStatus();
   });
 
   // The badge shows what will answer (GET /status, with your saved choice) and opens Settings when clicked.
   async function loadStatus(autoOpen) {
+    lastStatusFetch = Date.now();
     var name = document.getElementById("providerBadgeName");
     var result = await callApi("/status", { headers: withLlmHeaders({}) });
     if (!result.ok) {
@@ -338,10 +378,10 @@
     providerBadge.classList.toggle("is-unconfigured", !info.configured);
     if (info.configured) {
       name.textContent = info.provider + " · " + info.model;
-      providerBadge.title = "Change your model or API key";
+      setTip(providerBadge, "Change your model or API key");
     } else {
       name.textContent = "Add your API key";
-      providerBadge.title = info.provider + " needs an API key. Click to add yours.";
+      setTip(providerBadge, info.provider + " needs an API key. Click to add yours.");
       if (autoOpen) openSettings();
     }
   }
@@ -617,9 +657,8 @@
     if (inFlight) inFlight.abort();
     var result = await callApi("/chat/reset", { method: "POST", headers: JSON_HEADERS, body: "{}" });
     if (!result.ok) { showToast("Couldn't start a new chat. " + result.message); return; }
-    transcript = [];
     closePanel();
-    renderMessages();
+    withTransition(function () { transcript = []; renderMessages(); });
     input.focus();
   });
 
@@ -646,50 +685,106 @@
   // ---------------------------------------------------------------- //
 
   var DOC_ICONS = { pdf: "📄", txt: "📄", docx: "📄", csv: "📊", json: "🧾" };
+  var SKELETON_DELAY_MS = 300; // loads faster than this never flash a placeholder
+  var SKELETON_ROWS = 3;
+  var docsLoaded = false;      // true once a list (even an empty one) has been shown
+  var docsRequestId = 0;       // newest request wins; older responses are dropped
+  var lastDocsFetch = 0;
+  var lastStatusFetch = 0;
   var allDocuments = [];
   var selectedDocumentIds = new Set();
   var allDocsToggle = document.getElementById("allDocsToggle");
 
+  var pendingDeleteIds = new Set(); // documents already gone from the screen whose DELETE has not finished
+
   function getSelectedDocumentIds() {
+    if (pendingDeleteIds.size) {
+      // A document is on its way out: name the ones that stay instead of "all", so the model can't cite it.
+      var keep = (allDocsToggle && !allDocsToggle.checked) ? Array.from(selectedDocumentIds) : allDocuments.map(function (d) { return d.id; });
+      return keep.filter(function (id) { return !pendingDeleteIds.has(id); });
+    }
     if (!allDocsToggle || allDocsToggle.checked) return null; // null = ask about every document
     return Array.from(selectedDocumentIds);
   }
 
+  // Stale-while-revalidate: whatever list we already have is painted first; the request then refreshes it in the
+  // background (and again from revalidate() when the window regains focus or the network returns).
   async function loadDocuments() {
     var list = document.getElementById("docsList");
-    list.replaceChildren(el("div", "mp-list-empty", "Loading…"));
+    var requestId = ++docsRequestId;
+    lastDocsFetch = Date.now();
+    if (docsLoaded) renderDocsList();
+    list.setAttribute("aria-busy", "true");
+    // Gray rows in the shape of the real ones, but only if the answer is slow (and there is nothing to show yet).
+    var skeletonTimer = docsLoaded ? null : setTimeout(function () {
+      var rows = [];
+      for (var i = 0; i < SKELETON_ROWS; i++) rows.push(buildDocRow(null));
+      list.replaceChildren.apply(list, rows);
+    }, SKELETON_DELAY_MS);
     var result = await callApi("/documents");
-    if (!result.ok) { list.replaceChildren(el("div", "mp-list-empty", "Could not load documents.")); return; }
+    clearTimeout(skeletonTimer);
+    if (requestId !== docsRequestId) return; // a newer request owns the screen now
+    list.removeAttribute("aria-busy");
+    if (!result.ok) {
+      if (!docsLoaded) list.replaceChildren(el("div", "mp-list-empty", "Could not load documents."));
+      return; // a failed background refresh keeps showing the cached list
+    }
 
-    allDocuments = result.data.documents || [];
+    var known = new Set(allDocuments.map(function (d) { return d.id; }));
+    docsLoaded = true;
+    allDocuments = (result.data.documents || []).filter(function (d) { return !pendingDeleteIds.has(d.id); });
     var currentIds = new Set(allDocuments.map(function (d) { return d.id; }));
     selectedDocumentIds = new Set(Array.from(selectedDocumentIds).filter(function (id) { return currentIds.has(id); }));
-    allDocuments.forEach(function (d) { selectedDocumentIds.add(d.id); });
+    // Only documents we hadn't seen yet start ticked, so a refresh never undoes someone's own choices.
+    allDocuments.forEach(function (d) { if (!known.has(d.id)) selectedDocumentIds.add(d.id); });
     renderDocsList();
   }
+
+  // A view-transition-name must be a valid, unique identifier; document ids are server-made strings.
+  function docTransitionName(id) { return "doc-" + String(id).replace(/[^A-Za-z0-9_-]/g, "_"); }
+
+  function renderDocsListAnimated() { withTransition(renderDocsList); }
 
   function renderDocsList() {
     var list = document.getElementById("docsList");
     if (allDocuments.length === 0) { list.replaceChildren(el("div", "mp-list-empty", "No documents uploaded yet.")); return; }
 
     var askAll = allDocsToggle.checked;
-    list.replaceChildren.apply(list, allDocuments.map(function (d) {
-      var row = el("div", "mp-list-item");
-      var checkbox = document.createElement("input");
-      checkbox.type = "checkbox"; checkbox.className = "doc-checkbox";
-      checkbox.checked = askAll || selectedDocumentIds.has(d.id);
-      checkbox.disabled = askAll;
-      checkbox.addEventListener("change", function () {
-        if (checkbox.checked) selectedDocumentIds.add(d.id); else selectedDocumentIds.delete(d.id);
-      });
-      var body = el("div", "mp-list-item__body");
-      body.appendChild(el("div", "mp-list-item__title", (DOC_ICONS[d.type] || "📄") + " " + d.name));
-      var del = el("button", "mp-btn mp-btn--ghost mp-btn--sm", "🗑");
-      del.type = "button"; del.title = "Delete";
-      del.addEventListener("click", function () { deleteDocument(d.id); });
-      row.appendChild(checkbox); row.appendChild(body); row.appendChild(del);
+    list.replaceChildren.apply(list, allDocuments.map(function (d) { return buildDocRow(d, askAll); }));
+  }
+
+  // One row builder for both states. `d === null` builds the loading skeleton: the very same elements and
+  // classes, filled with placeholder text and painted as gray blocks, so the real rows land without a jump.
+  function buildDocRow(d, askAll) {
+    var skeleton = d === null;
+    var row = el("div", "mp-list-item" + (skeleton ? " is-skeleton" : ""));
+    var checkbox = document.createElement("input");
+    checkbox.type = "checkbox"; checkbox.className = "doc-checkbox";
+    if (!skeleton) checkbox.setAttribute("aria-label", "Ask about " + d.name);
+    var checkCell = el("label", "mp-list-item__check"); // the label is the (large) tap target; the checkbox stays small
+    checkCell.appendChild(checkbox);
+    var body = el("div", "mp-list-item__body");
+    var title = el("div", "mp-list-item__title", skeleton ? "Loading document name" : (DOC_ICONS[d.type] || "📄") + " " + d.name);
+    body.appendChild(title);
+    var del = el("button", "mp-btn mp-btn--ghost mp-btn--sm", "🗑");
+    del.type = "button";
+    row.appendChild(checkCell); row.appendChild(body); row.appendChild(del);
+
+    if (skeleton) {
+      row.setAttribute("aria-hidden", "true");
+      checkbox.disabled = true; checkbox.tabIndex = -1;
+      del.disabled = true; del.tabIndex = -1;
       return row;
-    }));
+    }
+    row.style.viewTransitionName = docTransitionName(d.id); // so the other rows glide up when this one goes
+    checkbox.checked = askAll || selectedDocumentIds.has(d.id);
+    checkbox.disabled = askAll;
+    checkbox.addEventListener("change", function () {
+      if (checkbox.checked) selectedDocumentIds.add(d.id); else selectedDocumentIds.delete(d.id);
+    });
+    del.title = "Delete";
+    del.addEventListener("click", function () { deleteDocument(d.id); });
+    return row;
   }
 
   if (allDocsToggle) allDocsToggle.addEventListener("change", renderDocsList);
@@ -708,29 +803,285 @@
     if (fileInput.files[0]) uploadFile(fileInput.files[0]);
   });
 
+  var uploading = false;
+
   async function uploadFile(file) {
-    var status = document.getElementById("uploadStatus");
-    status.textContent = "Uploading " + file.name + "…";
-    var formData = new FormData();
-    formData.append("file", file);
-    var result = await callApi("/documents/upload", { method: "POST", body: formData });
-    fileInput.value = "";
-    if (!result.ok) { status.textContent = "⚠️ " + result.message; return; }
-    var name = result.data.document.name;
-    status.textContent = result.data.duplicate ? "ℹ️ " + name + " was already uploaded." : "✅ " + name + " uploaded.";
-    await loadDocuments();
+    if (uploading) return; // a second click, drop or Enter while one is running would just send the same file twice
+    uploading = true;
+    var uploadBtn = document.getElementById("uploadBtn");
+    var dropzone = document.getElementById("dropzone");
+    uploadBtn.disabled = true;
+    dropzone.classList.add("is-busy");
+    try {
+      await flushPendingDeletes(); // a document deleted a moment ago must be really gone before the same file is added again
+      var status = document.getElementById("uploadStatus");
+      status.textContent = "Uploading " + file.name + "…";
+      var formData = new FormData();
+      formData.append("file", file);
+      var result = await callApi("/documents/upload", { method: "POST", body: formData });
+      fileInput.value = "";
+      if (!result.ok) { status.textContent = "⚠️ " + result.message; return; }
+      var name = result.data.document.name;
+      status.textContent = result.data.duplicate ? "ℹ️ " + name + " was already uploaded." : "✅ " + name + " uploaded.";
+      await loadDocuments();
+    } finally {
+      uploading = false;
+      uploadBtn.disabled = false;
+      dropzone.classList.remove("is-busy");
+    }
   }
 
+  var pendingDeletes = {}; // document id -> function that sends its DELETE right now
+
+  // No confirm dialog. The row leaves the list at once (optimistic) and an Undo toast opens; the DELETE is only
+  // sent when the toast runs out, so Undo is a pure client-side step. If the server then refuses, the row returns.
   async function deleteDocument(id) {
-    var result = await callApi("/documents/" + encodeURIComponent(id), { method: "DELETE" });
-    if (!result.ok && result.status !== 404) showToast("Couldn't delete that document. " + result.message);
-    loadDocuments();
+    var index = allDocuments.findIndex(function (d) { return d.id === id; });
+    if (index === -1) return;
+    var doc = allDocuments.splice(index, 1)[0];
+    pendingDeleteIds.add(id);
+    renderDocsListAnimated();
+
+    var timer = null;
+    var toast = null;
+
+    function undo() {
+      clearTimeout(timer);
+      delete pendingDeletes[id];
+      pendingDeleteIds.delete(id);
+      index = Math.min(index, allDocuments.length);
+      allDocuments.splice(index, 0, doc);
+      renderDocsListAnimated();
+    }
+
+    async function send() {
+      delete pendingDeletes[id];
+      // keepalive lets the request finish even if the tab is closing
+      var result = await callApi("/documents/" + encodeURIComponent(id), { method: "DELETE", keepalive: true });
+      pendingDeleteIds.delete(id);
+      if (!result.ok && result.status !== 404) {
+        index = Math.min(index, allDocuments.length);
+        allDocuments.splice(index, 0, doc);
+        renderDocsListAnimated();
+        showToast("Couldn't delete " + doc.name + ". " + result.message);
+      }
+    }
+
+    pendingDeletes[id] = function () { clearTimeout(timer); if (toast) toast.dismiss(); return send(); };
+    timer = setTimeout(send, UNDO_MS);
+    toast = showToast("Deleted " + doc.name, { duration: UNDO_MS, action: { label: "Undo", onClick: undo } });
   }
+
+  // Send every delete that is still waiting out its Undo window (before an upload, or when the page goes away).
+  function flushPendingDeletes() {
+    return Promise.all(Object.keys(pendingDeletes).map(function (id) { return pendingDeletes[id](); }));
+  }
+  window.addEventListener("pagehide", function () { flushPendingDeletes(); });
+
+  // ---------------------------------------------------------------- //
+  // Command menu (Cmd/Ctrl+K): search every page and action, keyboard only
+  // ---------------------------------------------------------------- //
+
+  // ---- keyboard shortcuts: one registry, shown wherever the action appears ----
+
+  var IS_MAC = /Mac|iPhone|iPad|iPod/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "");
+
+  // `mod` = Cmd on Mac, Ctrl elsewhere. Chords with `mod` work even inside the message box (they can't type a
+  // character); plain keys never fire while someone is typing in a field.
+  var SHORTCUTS = {
+    commandMenu: { key: "k", mod: true, run: function () { if (commandMenu.hidden) openCommandMenu(); else closeCommandMenu(); } },
+    newChat: { key: "o", mod: true, shift: true, run: function () { document.getElementById("newChatBtn").click(); } },
+    focusInput: { key: "/", run: function () { input.focus(); } },
+  };
+
+  function formatShortcut(def) {
+    var key = def.key.length === 1 ? def.key.toUpperCase() : def.key;
+    if (IS_MAC) return (def.mod ? "⌘" : "") + (def.shift ? "⇧" : "") + key;
+    return (def.mod ? "Ctrl+" : "") + (def.shift ? "Shift+" : "") + key;
+  }
+
+  function shortcutLabel(id) { return SHORTCUTS[id] ? formatShortcut(SHORTCUTS[id]) : ""; }
+
+  function makeKbd(id) { return el("kbd", "mp-kbd", shortcutLabel(id)); }
+
+  function isTypingTarget(node) {
+    if (!node || !node.closest) return false;
+    var field = node.closest("input, textarea, select, [contenteditable]");
+    if (!field) return false;
+    if (field.tagName === "INPUT") return !/^(checkbox|radio|button|submit|reset|file|range|color|image)$/.test(field.type);
+    return true;
+  }
+
+  function matchesShortcut(e, def) {
+    if (e.key.toLowerCase() !== def.key) return false;
+    var modDown = IS_MAC ? e.metaKey : e.ctrlKey;
+    var otherMod = IS_MAC ? e.ctrlKey : e.metaKey;
+    return !!def.mod === modDown && !otherMod && !!def.shift === e.shiftKey && !e.altKey;
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.defaultPrevented || e.isComposing) return;
+    var typing = isTypingTarget(e.target);
+    var ids = Object.keys(SHORTCUTS);
+    for (var i = 0; i < ids.length; i++) {
+      var def = SHORTCUTS[ids[i]];
+      if (!matchesShortcut(e, def)) continue;
+      if (typing && !def.mod) return;
+      if (ids[i] !== "commandMenu" && (!commandMenu.hidden || !settingsModal.hidden)) return; // a dialog owns the keyboard
+      e.preventDefault();
+      def.run();
+      return;
+    }
+  });
+
+  // A tooltip is "text (shortcut)". setTip keeps the plain text so the hint can be recomputed.
+  function applyHint(node) {
+    var id = node.getAttribute("data-shortcut");
+    var base = node.dataset.tipBase || node.getAttribute("title") || "";
+    node.dataset.tipBase = base;
+    var label = shortcutLabel(id);
+    node.title = label ? (base ? base + " (" + label + ")" : label) : base;
+  }
+
+  function setTip(node, text) { node.dataset.tipBase = text; applyHint(node); }
+
+  function applyShortcutHints() {
+    document.querySelectorAll("[data-shortcut]").forEach(function (node) {
+      var id = node.getAttribute("data-shortcut");
+      var def = SHORTCUTS[id];
+      if (!def) return;
+      applyHint(node);
+      node.setAttribute("aria-keyshortcuts", (def.mod ? (IS_MAC ? "Meta+" : "Control+") : "") + (def.shift ? "Shift+" : "") + (def.key.length === 1 ? def.key.toUpperCase() : def.key));
+      if (node.hasAttribute("data-shortcut-badge") && !node.querySelector(".mp-kbd")) node.appendChild(makeKbd(id));
+    });
+  }
+
+  var commandMenu = document.getElementById("commandMenu");
+  var cmdInput = document.getElementById("cmdInput");
+  var cmdList = document.getElementById("cmdList");
+  var cmdEmpty = document.getElementById("cmdEmpty");
+  var cmdVisible = [];   // the actions currently listed, in order
+  var cmdIndex = 0;      // which of them is highlighted
+  var cmdReturnFocus = null;
+
+  // Built each time the menu opens so it always reflects the current SUGGESTIONS.
+  function buildCommandActions() {
+    var actions = [
+      { id: "newChat", label: "New chat", shortcut: "newChat", keywords: "clear reset conversation", run: function () { document.getElementById("newChatBtn").click(); } },
+      { id: "chat", label: "Go to chat", keywords: "close panel back", run: closePanel },
+      { id: "documents", label: "Open documents", keywords: "files rag manage", run: function () { openPanel("documents"); } },
+      { id: "upload", label: "Upload a document", keywords: "file pdf docx csv json txt", run: function () { openPanel("documents"); fileInput.click(); } },
+      { id: "theme", label: "Toggle light / dark theme", keywords: "appearance mode", run: toggleTheme },
+      { id: "settings", label: "Model & API key", keywords: "provider settings bring your own key", run: openSettings },
+      { id: "focusInput", label: "Focus the message box", shortcut: "focusInput", keywords: "type write compose", run: function () { input.focus(); } },
+    ];
+    SUGGESTIONS.forEach(function (text, i) {
+      actions.push({ id: "prompt" + i, label: "Ask: " + text, keywords: "suggestion prompt example", run: function () { input.value = text; input.focus(); autosizeInput(); } });
+    });
+    return actions;
+  }
+
+  // Every typed word must appear somewhere in the label or keywords; label-prefix matches sort first.
+  function filterCommands(actions, query) {
+    var words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return actions;
+    return actions.filter(function (a) {
+      var hay = (a.label + " " + (a.keywords || "")).toLowerCase();
+      return words.every(function (w) { return hay.indexOf(w) !== -1; });
+    }).sort(function (a, b) {
+      return (b.label.toLowerCase().indexOf(words[0]) === 0) - (a.label.toLowerCase().indexOf(words[0]) === 0);
+    });
+  }
+
+  function setActiveCommand(index) {
+    cmdIndex = index;
+    Array.prototype.forEach.call(cmdList.children, function (li, i) { li.setAttribute("aria-selected", String(i === index)); });
+    var active = cmdList.children[index];
+    if (active) {
+      cmdInput.setAttribute("aria-activedescendant", active.id);
+      active.scrollIntoView({ block: "nearest" });
+    } else {
+      cmdInput.removeAttribute("aria-activedescendant");
+    }
+  }
+
+  function renderCommandList() {
+    cmdVisible = filterCommands(buildCommandActions(), cmdInput.value);
+    cmdList.replaceChildren.apply(cmdList, cmdVisible.map(function (action, i) {
+      var li = el("li", "mp-cmd__item");
+      li.id = "cmd-opt-" + i;
+      li.setAttribute("role", "option");
+      li.appendChild(el("span", "mp-cmd__label", action.label));
+      if (action.shortcut) li.appendChild(makeKbd(action.shortcut));
+      li.addEventListener("mousedown", function (e) { e.preventDefault(); }); // keep focus in the field
+      li.addEventListener("mousemove", function () { if (cmdIndex !== i) setActiveCommand(i); });
+      li.addEventListener("click", function () { runCommand(i); });
+      return li;
+    }));
+    cmdEmpty.hidden = cmdVisible.length > 0;
+    setActiveCommand(0);
+  }
+
+  function openCommandMenu() {
+    if (!commandMenu.hidden || !settingsModal.hidden) return;
+    cmdReturnFocus = document.activeElement;
+    cmdInput.value = "";
+    commandMenu.hidden = false;
+    renderCommandList();
+    cmdInput.focus();
+  }
+
+  function closeCommandMenu() {
+    if (commandMenu.hidden) return;
+    commandMenu.hidden = true;
+    if (cmdReturnFocus && cmdReturnFocus.focus) cmdReturnFocus.focus();
+    cmdReturnFocus = null;
+  }
+
+  function runCommand(index) {
+    var action = cmdVisible[index];
+    if (!action) return;
+    closeCommandMenu(); // first, so an action that moves focus (or opens a dialog) wins it
+    action.run();
+  }
+
+  function onCommandKeydown(e) {
+    if (e.isComposing) return;
+    var count = cmdVisible.length;
+    if (e.key === "ArrowDown") { e.preventDefault(); if (count) setActiveCommand((cmdIndex + 1) % count); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (count) setActiveCommand((cmdIndex - 1 + count) % count); }
+    else if (e.key === "Enter") { e.preventDefault(); runCommand(cmdIndex); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeCommandMenu(); } // not also the panel behind it
+    else if (e.key === "Tab") { e.preventDefault(); } // the field is the only stop; arrows move through the list
+  }
+
+  cmdInput.addEventListener("keydown", onCommandKeydown);
+  cmdInput.addEventListener("input", renderCommandList);
+  commandMenu.addEventListener("click", function (e) { if (e.target === commandMenu) closeCommandMenu(); });
+  document.getElementById("cmdBtn").addEventListener("click", openCommandMenu);
+
+  // ---------------------------------------------------------------- //
+  // Revalidate: refresh what is on screen when the window regains focus or the network comes back
+  // ---------------------------------------------------------------- //
+
+  var REVALIDATE_MIN_GAP_MS = 5000; // focus fires a lot; don't hammer the server
+
+  function revalidate(force) {
+    var now = Date.now();
+    if (activePanel === "documents" && (force || now - lastDocsFetch > REVALIDATE_MIN_GAP_MS)) loadDocuments();
+    if (force || now - lastStatusFetch > 30000) loadStatus();
+  }
+
+  window.addEventListener("focus", function () { revalidate(false); });
+  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") revalidate(false); });
+  window.addEventListener("online", function () { revalidate(true); });
 
   // ---------------------------------------------------------------- //
   // Boot
   // ---------------------------------------------------------------- //
 
+  applyShortcutHints();
   renderMessages();
+  loadDocuments();  // warm the cache, so the first time Documents opens it is already there
   loadStatus(true); // fills the sidebar's provider badge and asks for an API key right away if none is set
 })();
