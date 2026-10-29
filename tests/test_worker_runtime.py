@@ -31,6 +31,10 @@ class FakeModelResponse:
     def json(self):
         return {"choices": [{"message": {"role": "assistant", "content": self._content}}]}
 
+    def iter_lines(self, decode_unicode=False):
+        yield 'data: {"choices": [{"delta": {"content": "%s"}}]}' % self._content
+        yield "data: [DONE]"
+
 
 @pytest.fixture
 def worker(monkeypatch):
@@ -45,7 +49,7 @@ def worker(monkeypatch):
     binding = FakeD1Binding()
     sent = []
 
-    def fake_post(url, json=None, headers=None, timeout=None, data=None):
+    def fake_post(url, json=None, headers=None, timeout=None, data=None, stream=False):
         sent.append({"url": url, "json": json, "headers": headers})
         return FakeModelResponse(f"reply {len(sent)}")
 

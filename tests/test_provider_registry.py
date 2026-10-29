@@ -6,10 +6,33 @@ from morphie.providers.openai import OpenAIProvider
 from morphie.providers.registry import ProviderRegistry
 
 
-def test_lists_all_three_providers():
+def test_lists_the_native_compatible_and_custom_providers():
     registry = ProviderRegistry()
-    ids = {p.id for p in registry.list_providers()}
-    assert ids == {"mistral", "ollama", "openai"}
+    by_group = {}
+    for p in registry.list_providers():
+        by_group.setdefault(p.group, set()).add(p.id)
+    assert by_group == {
+        "native": {"mistral", "ollama", "openai"},
+        "compatible": {"groq", "openrouter", "together", "deepseek"},
+        "custom": {"custom"},
+    }
+
+
+def test_compatible_presets_call_their_own_fixed_endpoint():
+    registry = ProviderRegistry()
+    assert registry.get("groq", api_key="k" * 10).base_url == "https://api.groq.com/openai/v1"
+    assert registry.get("openrouter", api_key="k" * 10).base_url == "https://openrouter.ai/api/v1"
+    custom = registry.get("custom", api_key=None, model="m", base_url="http://localhost:1234/v1/")
+    assert custom.base_url == "http://localhost:1234/v1" and custom.is_configured() and "Authorization" not in custom._headers()
+
+
+def test_embedders_exist_only_where_the_provider_has_embeddings_and_a_key():
+    registry = ProviderRegistry()
+    assert registry.get_embedder("openai", api_key="sk-" + "x" * 10).model_id == "openai:text-embedding-3-small"
+    assert registry.get_embedder("mistral", api_key="m" * 10).model_id == "mistral:mistral-embed"
+    assert registry.get_embedder("ollama").model_id == "ollama:nomic-embed-text"
+    assert registry.get_embedder("openai", api_key=None) is None
+    assert registry.get_embedder("groq", api_key="g" * 10) is None
 
 
 def test_get_returns_the_right_provider_class():

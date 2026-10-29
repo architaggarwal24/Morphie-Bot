@@ -22,6 +22,11 @@ class ModelReply:
             return self._body
         return {"choices": [{"message": {"role": "assistant", "content": self._content}}]}
 
+    def iter_lines(self, decode_unicode=False):
+        """The same reply as a streamed chat completion (`"stream": true`)."""
+        yield 'data: {"choices": [{"delta": {"content": %s}}]}' % __import__("json").dumps(self._content)
+        yield "data: [DONE]"
+
 
 @pytest.fixture
 def client(monkeypatch):
@@ -37,7 +42,7 @@ def client(monkeypatch):
 def sent(monkeypatch):
     calls = []
 
-    def fake_post(url, json=None, headers=None, timeout=None, data=None):
+    def fake_post(url, json=None, headers=None, timeout=None, data=None, stream=False):
         calls.append({"url": url, "json": json, "headers": headers})
         return ModelReply(f"reply {len(calls)}")
 
@@ -59,7 +64,8 @@ def byok(provider="mistral", key=KEY, model=None):
 def test_providers_endpoint_lists_what_the_settings_dialog_can_offer(client):
     data = client.get("/providers").get_json()
     ids = [p["id"] for p in data["providers"]]
-    assert set(ids) == {"mistral", "openai", "ollama"}  # ollama is offered when running on your own machine
+    # ollama is offered when running on your own machine; "custom" (a typed URL) only when the owner allows it
+    assert set(ids) == {"mistral", "openai", "ollama", "groq", "openrouter", "together", "deepseek"}
     mistral = data["providers"][0]
     assert mistral["requires_key"] is True and mistral["default_model"] and mistral["models"]
     assert data["server_default"]["configured"] is False
@@ -67,7 +73,7 @@ def test_providers_endpoint_lists_what_the_settings_dialog_can_offer(client):
 
 def test_ollama_is_not_offered_or_accepted_on_a_hosted_deployment(client, monkeypatch):
     monkeypatch.setattr(app_module, "IS_WORKERS", True)
-    assert {p["id"] for p in client.get("/providers").get_json()["providers"]} == {"mistral", "openai"}
+    assert {p["id"] for p in client.get("/providers").get_json()["providers"]} == {"mistral", "openai", "groq", "openrouter", "together", "deepseek"}
     res = client.get("/status", headers={"X-LLM-Provider": "ollama"})
     assert res.status_code == 400 and res.get_json()["code"] == "invalid_provider"
 

@@ -58,7 +58,7 @@ def test_the_d1_migration_creates_every_table_the_app_uses():
     assert {"documents", "chunks", "conversation_messages", "rate_buckets"} <= tables
 
 
-def test_public_assets_are_in_sync_with_the_templates_and_static_files():
+def test_the_built_web_ui_in_public_is_complete_and_csp_safe():
     result = subprocess.run([sys.executable, str(ROOT / "scripts" / "build_public.py"), "--check"], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout
 
@@ -66,7 +66,8 @@ def test_public_assets_are_in_sync_with_the_templates_and_static_files():
 def test_the_static_page_has_no_jinja_left_and_points_at_root_relative_assets():
     html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     assert "{{" not in html and "{%" not in html
-    assert 'href="/static/app.css"' in html and 'src="/static/app.js"' in html
+    assert re.search(r'<script type="module"[^>]* src="/assets/index-[^"]+\.js"', html)
+    assert re.search(r'href="/assets/index-[^"]+\.css"', html)
 
 
 def test_the_static_headers_match_the_flask_apps_security_headers():

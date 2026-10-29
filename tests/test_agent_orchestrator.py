@@ -192,6 +192,11 @@ def test_on_step_is_optional_and_changes_nothing_about_the_result():
     assert without == with_none
 
 
+def _core(events):
+    """Just which step happened (the details - input, output preview, timing - are checked separately)."""
+    return [{k: v for k, v in e.items() if k in ("type", "tool", "success")} for e in events]
+
+
 def test_on_step_reports_thinking_for_a_plain_answer_with_no_tools():
     provider = ScriptedProvider([text_result("Hi there!")])
     events = []
@@ -206,7 +211,7 @@ def test_on_step_reports_tool_call_and_tool_result_around_execution():
     router = ToolRouter(tools=[calculator_tool])
     events = []
     AgentOrchestrator(provider, router).run("what is 2+2?", on_step=events.append)
-    assert events == [
+    assert _core(events) == [
         {"type": "thinking"},
         {"type": "tool_call", "tool": "calculator"},
         {"type": "tool_result", "tool": "calculator", "success": True},
@@ -223,7 +228,7 @@ def test_on_step_reports_a_failed_tool_call():
     provider = ScriptedProvider([tool_call_result("c1", "broken", "{}"), text_result("Sorry, that tool isn't working.")])
     events = []
     AgentOrchestrator(provider, ToolRouter(tools=[broken])).run("do the thing", on_step=events.append)
-    assert {"type": "tool_result", "tool": "broken", "success": False} in events
+    assert {"type": "tool_result", "tool": "broken", "success": False} in _core(events)
 
 
 def test_on_step_reports_every_tool_in_a_multi_tool_batch_in_order():
@@ -233,7 +238,7 @@ def test_on_step_reports_every_tool_in_a_multi_tool_batch_in_order():
     ])
     events = []
     AgentOrchestrator(provider, ToolRouter(tools=[calculator_tool])).run("compute both", on_step=events.append)
-    calls = [e for e in events if e["type"] in ("tool_call", "tool_result")]
+    calls = [e for e in _core(events) if e["type"] in ("tool_call", "tool_result")]
     assert calls == [
         {"type": "tool_call", "tool": "calculator"}, {"type": "tool_result", "tool": "calculator", "success": True},
         {"type": "tool_call", "tool": "calculator"}, {"type": "tool_result", "tool": "calculator", "success": True},
@@ -262,3 +267,92 @@ def test_a_broken_on_step_callback_never_breaks_the_agent_loop(caplog):
 
     result = AgentOrchestrator(provider, ToolRouter()).run("hello", on_step=flaky)
     assert result["content"] == "Still works."
+
+
+def test_steps_carry_the_tool_input_a_short_output_and_timing():
+    provider = ScriptedProvider([
+        tool_call_result("c1", "calculator", '{"expression": "6*7"}'), text_result("It's 42."),
+    ])
+    events = []
+    AgentOrchestrator(provider, ToolRouter(tools=[calculator_tool])).run("6*7?", on_step=events.append)
+    call = next(e for e in events if e["type"] == "tool_call")
+    result = next(e for e in events if e["type"] == "tool_result")
+    assert call["input"] == "6*7"
+    assert "42" in result["output"] and isinstance(result["ms"], int)
+
+
+def test_web_search_results_become_link_cards():
+    from morphie.agent.orchestrator import _links
+    out = "- Example News: something happened (https://news.example/a)\n- Other: more (https://other.example/b)"
+    assert _links("web_search", out) == [
+        {"title": "Example News", "url": "https://news.example/a"}, {"title": "Other", "url": "https://other.example/b"},
+    ]
+    assert _links("calculator", out) == []
+
+
+class StreamingProvider(ScriptedProvider):
+    """Scripted, but streams: the reply text is handed over in pieces."""
+
+    def capabilities(self):
+        from morphie.providers.base import ProviderCapabilities
+        return ProviderCapabilities(tools=True, vision=False, streaming=True)
+
+    def chat_stream(self, messages, tools=None, on_delta=None, should_cancel=None):
+        result = self.chat(messages, tools)
+        if result.content and on_delta:
+            for piece in result.content.split(" "):
+                on_delta(piece + " ")
+        return result
+
+
+def test_a_streaming_provider_sends_the_answer_as_tokens():
+    tokens = []
+    out = AgentOrchestrator(StreamingProvider([text_result("one two three")]), ToolRouter()).run("count", on_token=tokens.append)
+    assert "".join(tokens).strip() == "one two three" and out["streamed"] is True
+
+
+def test_text_written_before_a_tool_call_is_withdrawn():
+    from morphie.providers.base import ChatResult, ToolCallRequest
+    pre = tool_call_result("c1", "calculator", '{"expression": "1+1"}')
+    pre = ChatResult(content="Let me check", tool_calls=pre.tool_calls, raw_assistant_message=pre.raw_assistant_message)
+    events, tokens = [], []
+    AgentOrchestrator(StreamingProvider([pre, text_result("It's 2.")]), ToolRouter(tools=[calculator_tool])).run(
+        "1+1?", on_step=events.append, on_token=tokens.append)
+    assert {"type": "discard_text"} in events
+    assert events.index({"type": "discard_text"}) < next(i for i, e in enumerate(events) if e["type"] == "tool_call")
+
+
+def test_a_provider_that_cannot_stream_is_not_asked_to():
+    tokens = []
+    out = AgentOrchestrator(ScriptedProvider([text_result("plain")]), ToolRouter()).run("hi", on_token=tokens.append)
+    assert tokens == [] and out["streamed"] is False and out["content"] == "plain"
+
+
+def test_cancel_stops_before_the_next_model_or_tool_call():
+    from morphie.agent.orchestrator import TurnCancelled
+    import pytest
+    provider = ScriptedProvider([tool_call_result("c1", "calculator", '{"expression": "1+1"}'), text_result("2")])
+    stop = {"now": False}
+
+    def on_step(e):
+        if e["type"] == "tool_result":
+            stop["now"] = True
+
+    with pytest.raises(TurnCancelled):
+        AgentOrchestrator(provider, ToolRouter(tools=[calculator_tool])).run(
+            "1+1", on_step=on_step, should_cancel=lambda: stop["now"])
+    assert len(provider.calls) == 1  # the second model call never happened
+
+
+def test_a_tool_hint_offers_only_that_tool_first_and_says_so():
+    provider = ScriptedProvider([text_result("ok")])
+    AgentOrchestrator(provider, ToolRouter()).run("news please", tool_hint="web_search")
+    messages, tools = provider.calls[0]
+    assert [t["function"]["name"] for t in tools] == ["web_search"]
+    assert any("web_search" in m["content"] for m in messages if m["role"] == "system")
+
+
+def test_an_unknown_tool_hint_is_ignored():
+    provider = ScriptedProvider([text_result("ok")])
+    AgentOrchestrator(provider, ToolRouter()).run("hi", tool_hint="rm_rf")
+    assert len(provider.calls[0][1]) > 1

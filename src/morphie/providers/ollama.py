@@ -18,6 +18,7 @@ providers:
 from __future__ import annotations
 
 import json
+from typing import Callable
 
 from .. import net as requests  # `requests` locally; fetch() on Cloudflare Workers (see morphie/net.py)
 
@@ -75,10 +76,66 @@ class OllamaProvider(LLMProvider):
         payload = {"model": self.model, "messages": _translate_messages(messages), "stream": False}
         if tools:
             payload["tools"] = tools
+        response = self._send(payload)
 
         try:
+            data = response.json()
+            message = data["message"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ProviderBadResponseError("Ollama returned an unreadable response.", provider=self.name) from exc
+
+        return self._to_result(message.get("content"), message.get("tool_calls") or [])
+
+    def chat_stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        on_delta: "Callable[[str], None] | None" = None,
+        should_cancel: "Callable[[], bool] | None" = None,
+    ) -> ChatResult:
+        """chat() with `"stream": true`: Ollama sends one JSON object per line."""
+        payload = {"model": self.model, "messages": _translate_messages(messages), "stream": True}
+        if tools:
+            payload["tools"] = tools
+        response = self._send(payload, stream=True)
+        text: list[str] = []
+        calls: list[dict] = []
+        try:
+            for line in requests.decoded_lines(response):
+                if should_cancel is not None and should_cancel():
+                    break
+                if not line or not line.strip():
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(chunk, dict):
+                    continue
+                if chunk.get("error"):
+                    raise ProviderUnavailableError(f"Ollama stopped with an error: {str(chunk['error'])[:200]}", provider=self.name)
+                message = chunk.get("message") or {}
+                piece = message.get("content")
+                if isinstance(piece, str) and piece:
+                    text.append(piece)
+                    if on_delta is not None:
+                        on_delta(piece)
+                calls.extend(message.get("tool_calls") or [])
+                if chunk.get("done"):
+                    break
+        except requests.RequestException as exc:
+            raise ProviderUnavailableError("The connection to Ollama dropped.", provider=self.name) from exc
+        finally:
+            close = getattr(response, "close", None)
+            if close:
+                close()
+        return self._to_result("".join(text) or None, calls)
+
+    def _send(self, payload: dict, stream: bool = False):
+        try:
+            kwargs = {"stream": True} if stream else {}
             response = requests.post(
-                f"{self.base_url}/api/chat", headers=self._headers(), json=payload, timeout=DEFAULT_TIMEOUT
+                f"{self.base_url}/api/chat", headers=self._headers(), json=payload, timeout=DEFAULT_TIMEOUT, **kwargs
             )
         except requests.Timeout as exc:
             raise ProviderTimeoutError("Ollama timed out. The model may still be loading.", provider=self.name) from exc
@@ -97,14 +154,11 @@ class OllamaProvider(LLMProvider):
             raise ProviderUnavailableError(
                 f"Ollama returned an error{f': {detail}' if detail else ''}.", provider=self.name
             )
+        return response
 
-        try:
-            data = response.json()
-            message = data["message"]
-        except (ValueError, KeyError, TypeError) as exc:
-            raise ProviderBadResponseError("Ollama returned an unreadable response.", provider=self.name) from exc
-
-        content = message.get("content")
+    @staticmethod
+    def _to_result(content: str | None, raw_tool_calls: list[dict]) -> ChatResult:
+        message = {"tool_calls": raw_tool_calls}
         tool_calls: list[ToolCallRequest] = []
         flat_tool_calls: list[dict] = []
 

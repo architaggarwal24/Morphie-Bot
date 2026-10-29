@@ -2,7 +2,7 @@
 API a Python Worker sees (`prepare(sql).bind(*values)` then `.all()` / `.run()`, and `batch([...])`).
 
 `make_d1()` wraps it in the project's `D1` class with identity hooks instead of Pyodide's, so the real SQL and
-the real store classes are exercised against the real schema (migrations/0001_init.sql).
+the real store classes are exercised against the real schema (every file in migrations/, in order).
 """
 
 import sqlite3
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from morphie.d1 import D1
 
-MIGRATION = Path(__file__).resolve().parent.parent / "migrations" / "0001_init.sql"
+MIGRATIONS = sorted((Path(__file__).resolve().parent.parent / "migrations").glob("*.sql"))
 
 
 class FakeStatement:
@@ -37,7 +37,8 @@ class FakeD1Binding:
     def __init__(self):
         self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(MIGRATION.read_text())
+        for migration in MIGRATIONS:
+            self.conn.executescript(migration.read_text())
         self.round_trips = 0
 
     def prepare(self, sql):

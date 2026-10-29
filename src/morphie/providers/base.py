@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -170,10 +170,19 @@ class LLMProvider(ABC):
         need to know which vendor is behind this instance to handle it.
         """
 
-    def stream(self, messages: list[dict], tools: list[dict] | None = None):
-        """Optional: yield text deltas as they arrive. Not every provider
-        implements this yet (see capabilities().streaming); the default
-        raises so a caller can detect and fall back to chat()."""
+    def chat_stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        on_delta: "Callable[[str], None] | None" = None,
+        should_cancel: "Callable[[], bool] | None" = None,
+    ) -> ChatResult:
+        """Optional: the same request as chat(), with the reply's text handed to
+        `on_delta` piece by piece as the provider produces it, and the same
+        normalized ChatResult at the end (tool calls included). If
+        `should_cancel()` turns true, reading stops early and whatever arrived
+        is returned. Providers that can't stream raise NotImplementedError and
+        the caller falls back to chat() (see capabilities().streaming)."""
         raise NotImplementedError(f"{self.name} does not support streaming.")
 
     def capabilities(self) -> ProviderCapabilities:

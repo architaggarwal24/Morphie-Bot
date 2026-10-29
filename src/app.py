@@ -6,16 +6,20 @@ import time
 import uuid
 from datetime import timedelta
 
-from flask import Flask, Response, request, render_template, jsonify, session, stream_with_context
+from pathlib import Path
+from urllib.parse import urlparse
+
+from flask import Flask, Response, request, jsonify, send_from_directory, session, stream_with_context
 from werkzeug.exceptions import HTTPException
 
 from config import Config, apply_worker_env
-from morphie.agent.orchestrator import AgentOrchestrator
+from morphie.agent.orchestrator import AgentOrchestrator, TurnCancelled
 from morphie.agent.tool_router import ToolRouter
 from morphie.d1 import D1, D1ConversationHistory, D1RateLimiter
 from morphie.history import ConversationHistory
 from morphie.orchestrator import MorphieOrchestrator
 from morphie.providers.base import LLMProvider, ProviderError, ProviderNotConfiguredError
+from morphie.providers.embeddings import EmbeddingProvider
 from morphie.providers.embeddings_local import LocalEmbeddingProvider
 from morphie.providers.registry import registry
 from morphie.rag.d1_store import D1VectorStore
@@ -24,7 +28,11 @@ from morphie.rag.vector_store import LocalVectorStore
 from morphie.runtime import IS_WORKERS
 from morphie.security import RateLimiter, is_trusted_origin
 
-app = Flask(__name__)
+# The web UI is a React app built by Vite (web/) into public/. Cloudflare serves public/ straight from the edge;
+# locally Flask serves the very same files, so there is one UI and one build for both.
+PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
+
+app = Flask(__name__, static_folder=None)
 # JSON endpoints carry short messages; only the upload route needs a large body.
 MAX_JSON_BODY_BYTES = 256 * 1024
 
@@ -55,7 +63,13 @@ def _build_limiters(chat_per_minute: int, upload_per_minute: int, enabled: bool 
     def pair(name: str, limit: int):
         limit = limit if enabled else 0
         return make(f"{name}:user", limit), make(f"{name}:ip", limit * 5)
-    return {"/chat": pair("chat", chat_per_minute), "/documents/upload": pair("upload", upload_per_minute)}
+    return {
+        "/chat": pair("chat", chat_per_minute),
+        "/chat/followups": pair("followups", chat_per_minute),
+        "/chat/cancel": pair("cancel", chat_per_minute * 2),
+        "/chat/rewind": pair("rewind", chat_per_minute * 2),
+        "/documents/upload": pair("upload", upload_per_minute),
+    }
 
 
 # ---- The runtime: provider, agent, history, document RAG, limiters ----------
@@ -178,18 +192,42 @@ def resolve_provider() -> LLMProvider:
 # A visitor can choose the provider, model and API key in the page's Settings. The browser keeps them and sends
 # them as headers with each request; the server uses them for that request only and never stores or logs them.
 # With no headers the server's own provider is used (a self-hoster's .env), so nothing changes for them.
-# Only providers with a fixed, known endpoint can be chosen: a visitor-supplied URL would let anyone aim this
-# server at arbitrary addresses (SSRF), so "custom base URL" is deliberately not offered.
+# Providers have fixed, known endpoints. The one exception, "Custom URL", lets the visitor name the server to
+# call, which would let anyone aim this server at arbitrary addresses (SSRF) - so it only exists when the owner
+# turns it on (ALLOW_CUSTOM_LLM_URL) for a deployment only they use.
 
 HEADER_PROVIDER, HEADER_MODEL, HEADER_KEY = "X-LLM-Provider", "X-LLM-Model", "X-LLM-Key"
-_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$")
+HEADER_BASE_URL = "X-LLM-Base-URL"
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$")
 _API_KEY_RE = re.compile(r"^[\x21-\x7e]{8,400}$")  # printable ASCII, no spaces, no control characters
+_BASE_URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:\d{1,5})?(/[A-Za-z0-9._~/-]*)?$")
+
+
+def _blocked_host(url: str) -> bool:
+    """Addresses a Custom URL may never point at even when the owner allows Custom URLs: cloud metadata services
+    (link-local 169.254.x.x and friends), the unspecified address, and bare-number IPs (2130706433 = 127.0.0.1),
+    which exist mainly to slip past checks like this one."""
+    host = (urlparse(url).hostname or "").lower()
+    return (
+        not host
+        or host.isdigit()
+        or host.startswith("169.254.")
+        or host in {"0.0.0.0", "metadata.google.internal", "metadata", "100.100.100.200"}
+        or host.endswith(".internal")
+    )
 
 
 def byok_providers() -> list:
     """Providers a visitor may use. Ollama needs no key and lives on the server's own network, so it is only
-    offered when the app runs on your machine, never on a hosted deployment."""
-    return [info for info in registry.list_providers() if info.requires_api_key or not IS_WORKERS]
+    offered when the app runs on your machine, never on a hosted deployment. Custom URL needs the owner's opt-in."""
+    offered = []
+    for info in registry.list_providers():
+        if info.id == "custom":
+            if Config.ALLOW_CUSTOM_LLM_URL:
+                offered.append(info)
+        elif info.requires_api_key or not IS_WORKERS:
+            offered.append(info)
+    return offered
 
 
 def _provider_choice() -> dict | None:
@@ -207,7 +245,13 @@ def _provider_choice() -> dict | None:
     key = request.headers.get(HEADER_KEY, "").strip() or None
     if key and not _API_KEY_RE.match(key):
         raise ApiError("That API key doesn't look valid. Re-copy it from your provider's dashboard.", 400, "invalid_api_key")
-    return {"info": info, "model": model or info.default_model, "key": key if info.requires_api_key else None}
+    base_url = None
+    if info.id == "custom":
+        base_url = request.headers.get(HEADER_BASE_URL, "").strip().rstrip("/") or None
+        if not base_url or len(base_url) > 200 or not _BASE_URL_RE.match(base_url) or _blocked_host(base_url):
+            raise ApiError("Enter the server's URL, like http://localhost:1234/v1.", 400, "invalid_base_url")
+    keep_key = info.requires_api_key or info.id == "custom"
+    return {"info": info, "model": model or info.default_model, "key": key if keep_key else None, "base_url": base_url}
 
 
 def request_provider_resolver():
@@ -224,10 +268,28 @@ def request_provider_resolver():
             raise ProviderNotConfiguredError(
                 f"{info.display_name} needs an API key. Open Settings and add yours.", provider=info.display_name,
             )
-        kwargs = {"base_url": Config.OLLAMA_BASE_URL} if info.id == "ollama" else {}
+        kwargs = {}
+        if info.id == "ollama":
+            kwargs = {"base_url": Config.OLLAMA_BASE_URL}
+        elif info.id == "custom":
+            kwargs = {"base_url": choice["base_url"]}
         return registry.get(info.id, api_key=choice["key"], model=choice["model"], **kwargs)
 
     return resolve
+
+
+def request_embedder() -> EmbeddingProvider | None:
+    """Meaning-based embeddings for document search, from the same provider and key that answer this request
+    (or the server's own .env provider). None = keyword search only."""
+    if not Config.RAG_SEMANTIC_SEARCH:
+        return None
+    choice = _provider_choice()
+    if choice is not None:
+        provider_id, key = choice["info"].id, choice["key"]
+    else:
+        provider_id = Config.LLM_PROVIDER
+        key = {"mistral": Config.MISTRAL_API_KEY, "openai": Config.OPENAI_API_KEY}.get(provider_id)
+    return registry.get_embedder(provider_id, api_key=key, base_url=Config.OLLAMA_BASE_URL)
 
 
 def _orchestrator() -> MorphieOrchestrator:
@@ -337,12 +399,12 @@ def add_security_headers(response):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    # Scripts may only load from this origin: the UI is one static JS file with
+    # Scripts may only load from this origin: the UI is a Vite-built bundle with
     # no inline <script>, inline handlers, eval, or CDN (tests/test_app_security.py
     # guards that, since a violation would be silently blocked by browsers).
     # No 'unsafe-inline' for scripts, so an injected <script> or onclick= cannot
     # run even if escaping ever failed. Styles are deliberately not restricted:
-    # the shell uses a few inline style attributes.
+    # the animation library writes inline style attributes.
     response.headers.setdefault(
         "Content-Security-Policy",
         "script-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'",
@@ -355,7 +417,7 @@ def add_security_headers(response):
 # ---- Input validation ----
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-MAX_DOCUMENT_IDS = 100
+MAX_DOCUMENT_IDS = 99  # D1 allows 100 bound parameters per statement; the workspace id is one of them
 
 
 def client_ip() -> str:
@@ -381,7 +443,25 @@ def clean_document_ids(value) -> list[str] | None:
 @app.route("/")
 def home():
     get_user_id()
-    return render_template("chatbot.html")
+    if not (PUBLIC_DIR / "index.html").is_file():
+        return error_response(
+            "The web UI hasn't been built yet. Run: npm --prefix web install && npm --prefix web run build",
+            503, "ui_not_built",
+        )
+    response = send_from_directory(PUBLIC_DIR, "index.html", max_age=0)
+    response.headers["Cache-Control"] = "no-cache"  # always revalidate: it names the current hashed bundle
+    return response
+
+
+@app.route("/assets/<path:filename>")
+def assets(filename):
+    # Vite puts a content hash in every asset name, so these can be cached forever.
+    return send_from_directory(PUBLIC_DIR / "assets", filename, max_age=31536000)
+
+
+@app.route("/favicon.svg")
+def favicon():
+    return send_from_directory(PUBLIC_DIR, "favicon.svg", max_age=86400)
 
 
 @app.route("/status", methods=["GET"])
@@ -410,10 +490,13 @@ def providers():
             {
                 "id": i.id, "name": i.display_name, "default_model": i.default_model,
                 "models": i.example_models, "requires_key": i.requires_api_key,
+                "group": i.group, "semantic_search": bool(i.embedding_model) and Config.RAG_SEMANTIC_SEARCH,
+                "needs_base_url": i.id == "custom",
             }
             for i in byok_providers()
         ],
         "server_default": {"provider": Config.LLM_PROVIDER, "configured": provider.is_configured()},
+        "features": {"followups": Config.FOLLOWUP_SUGGESTIONS},
     })
 
 
@@ -456,23 +539,62 @@ def resolve_orchestrator_error(exc: Exception) -> tuple[str, int, str]:
     return "Morphie could not complete that request. Please try again.", 502, "request_failed"
 
 
+_TURN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+# "/calc", "/web"... in the composer name a tool the visitor wants used; anything else is ignored.
+_TOOL_HINTS = {"calculator", "get_current_time", "web_search", "search_documents"}
+
+
+def _turn_options(body: dict) -> tuple[str, str | None]:
+    """The page's id for this question-and-answer pair (made up here if missing) and an optional forced tool."""
+    turn_id = body.get("turn_id")
+    if turn_id is not None and (not isinstance(turn_id, str) or not _TURN_ID_RE.match(turn_id)):
+        raise ApiError("That turn id isn't valid.", 400, "invalid_field")
+    tool_hint = body.get("tool")
+    if tool_hint is not None and tool_hint not in _TOOL_HINTS:
+        raise ApiError("That tool doesn't exist.", 400, "invalid_field")
+    return turn_id or uuid.uuid4().hex, tool_hint
+
+
+# Turns in flight on this server: (user, turn) -> Event. Set by Stop (POST /chat/cancel) or when the page goes
+# away mid-stream, and checked by the agent before every model and tool call.
+_active_turns: dict[tuple[str, str], threading.Event] = {}
+_active_lock = threading.Lock()
+
+
+def _begin_turn(user_id: str, turn_id: str) -> threading.Event:
+    event = threading.Event()
+    with _active_lock:
+        _active_turns[(user_id, turn_id)] = event
+    return event
+
+
+def _end_turn(user_id: str, turn_id: str, event: threading.Event) -> None:
+    with _active_lock:
+        if _active_turns.get((user_id, turn_id)) is event:  # a reused turn id must not end another stream's turn
+            del _active_turns[(user_id, turn_id)]
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
-    """One user message -> one reply. Body: {"message": str, "document_ids": [str] | null}.
-    For live progress (tool calls) as the reply is produced, use POST /chat/stream
-    instead - the two share validation and return the same JSON."""
+    """One user message -> one reply. Body: {"message": str, "document_ids": [str] | null, "turn_id"?: str,
+    "tool"?: str}. For live progress (tool calls, streamed text), use POST /chat/stream instead - the two share
+    validation and return the same JSON."""
     user_id = get_user_id()
     body = json_object()
     message = _validate_chat_input(body)
+    turn_id, tool_hint = _turn_options(body)
     resolver = request_provider_resolver()
+    semantic = request_embedder
 
     try:
         payload = _orchestrator().handle_chat(
             user_id=user_id, text=message,
             document_ids=clean_document_ids(body.get("document_ids")),
-            provider=resolver,
+            provider=resolver, turn_id=turn_id, tool_hint=tool_hint, semantic=semantic,
         )
         return jsonify(payload)
+    except TurnCancelled:
+        return error_response("That answer was stopped.", 409, "cancelled")
     except Exception as exc:  # noqa: BLE001 - every case is mapped to a safe message below
         friendly_message, status, code = resolve_orchestrator_error(exc)
         return error_response(friendly_message, status, code)
@@ -480,6 +602,7 @@ def chat():
 
 _STREAM_CHUNK_WORDS = 3
 _STREAM_CHUNK_DELAY_SECONDS = 0.02
+_HEARTBEAT_SECONDS = 1.0
 
 
 def _sse(event: str, data: dict) -> str:
@@ -489,8 +612,7 @@ def _sse(event: str, data: dict) -> str:
 def _typewriter_chunks(text: str):
     """`text` split into a few-word pieces that, concatenated, reproduce it
     exactly (whitespace included). Used to reveal a finished reply
-    progressively - see chat_stream()'s docstring for what this is and
-    is not."""
+    progressively when the provider could not stream it."""
     words = text.split(" ")
     if words == [""]:
         return
@@ -503,22 +625,22 @@ def _typewriter_chunks(text: str):
 def chat_stream():
     """Same input and the same result as POST /chat, delivered as
     Server-Sent Events so the UI can show the agent working instead of a
-    blank wait. Three kinds of frame, in order:
+    blank wait. Frames, in order:
 
-      event: step     {"type": "thinking" | "tool_call" | "tool_result", ...}
+      event: step     {"type": "thinking" | "tool_call" | "tool_result" | "discard_text", ...}
                        - emitted the instant each one actually happens (see
-                       MorphieOrchestrator.handle_chat's on_step).
-      event: token     {"text": "..."}  - the finished reply's `content`,
-                       revealed a few words at a time.
+                       AgentOrchestrator.run for the details they carry).
+      event: token     {"text": "..."}  - the reply. Streamed from the provider
+                       as it writes when it can (OpenAI, Mistral, Ollama and the
+                       compatible ones); otherwise the finished reply revealed a
+                       few words at a time.
       event: message   the exact JSON body POST /chat would return for the
                        same input - always sent exactly once, last.
       event: error     {"message", "code"} in place of `message` if the
                        turn failed (see resolve_orchestrator_error).
 
-    "Streaming" here means the *steps* are genuinely live; the reply text
-    itself is a finished response revealed progressively (a typewriter
-    effect), not per-token network streaming from the AI provider - see
-    README: Known limitations.
+    Lines starting with ":" are heartbeats; they are how the server notices that
+    the page went away (Stop, closed tab) and stops the turn without saving it.
 
     Input is validated up front exactly like /chat (shares
     _validate_chat_input), so bad input still gets a normal 4xx/413 JSON
@@ -529,68 +651,184 @@ def chat_stream():
     user_id = get_user_id()
     body = json_object()
     message = _validate_chat_input(body)
+    turn_id, tool_hint = _turn_options(body)
     document_ids = clean_document_ids(body.get("document_ids"))
     resolver = request_provider_resolver()  # captured here: the streaming thread can't see request headers
+    semantic = request_embedder()
+    orchestrator = _orchestrator()
 
     def generate():
         if IS_WORKERS:
-            # Pyodide has no threads: run the turn to completion, then replay its steps and reply as the same
-            # SSE events. The client sees identical frames; they just arrive together instead of live.
-            steps: list[dict] = []
+            # Pyodide has no threads, and the WSGI adapter sends the response whole: run the turn to completion,
+            # then replay its steps and reply as the same SSE events. The client sees identical frames; they just
+            # arrive together instead of live.
+            frames: list[str] = []
+            streamed: list[str] = []
             try:
-                payload = _orchestrator().handle_chat(
-                    user_id=user_id, text=message, document_ids=document_ids,
-                    provider=resolver, on_step=steps.append,
+                payload = orchestrator.handle_chat(
+                    user_id=user_id, text=message, document_ids=document_ids, provider=resolver,
+                    on_step=lambda e: frames.append(_sse("step", e)), on_token=streamed.append,
+                    turn_id=turn_id, tool_hint=tool_hint, semantic=semantic,
+                    # no threads here: a Stop arrives as POST /chat/cancel (another isolate) and leaves a tombstone
+                    should_cancel=lambda: history.is_cancelled(user_id, turn_id),
                 )
+            except TurnCancelled:
+                yield from frames
+                yield _sse("error", {"message": "That answer was stopped.", "code": "cancelled"})
+                return
             except Exception as exc:  # noqa: BLE001 - reported as an SSE error event, never raised here
-                for step in steps:
-                    yield _sse("step", step)
+                yield from frames
                 friendly_message, _status, code = resolve_orchestrator_error(exc)
                 yield _sse("error", {"message": friendly_message, "code": code})
                 return
-            for step in steps:
-                yield _sse("step", step)
+            yield from frames
             for chunk in _typewriter_chunks(payload.get("content") or ""):
                 yield _sse("token", {"text": chunk})
             yield _sse("message", payload)
             return
 
         events: "queue.Queue[tuple[str, object]]" = queue.Queue()
-
-        def on_step(event: dict) -> None:
-            events.put(("step", event))
+        cancel = _begin_turn(user_id, turn_id)
 
         def worker() -> None:
             try:
-                payload = _orchestrator().handle_chat(
-                    user_id=user_id, text=message, document_ids=document_ids,
-                    provider=resolver, on_step=on_step,
+                payload = orchestrator.handle_chat(
+                    user_id=user_id, text=message, document_ids=document_ids, provider=resolver,
+                    on_step=lambda e: events.put(("step", e)), on_token=lambda t: events.put(("token", t)),
+                    turn_id=turn_id, should_cancel=cancel.is_set, tool_hint=tool_hint, semantic=semantic,
                 )
                 events.put(("done", payload))
+            except TurnCancelled:
+                events.put(("cancelled", None))
             except Exception as exc:  # noqa: BLE001 - reported as an SSE error event, never raised here
                 events.put(("error", exc))
 
         threading.Thread(target=worker, daemon=True).start()
+        finished = False
 
-        while True:
-            kind, value = events.get()
-            if kind == "step":
-                yield _sse("step", value)
-            elif kind == "done":
-                for chunk in _typewriter_chunks(value.get("content") or ""):
-                    yield _sse("token", {"text": chunk})
-                    time.sleep(_STREAM_CHUNK_DELAY_SECONDS)
-                yield _sse("message", value)
-                return
-            else:
-                friendly_message, _status, code = resolve_orchestrator_error(value)
-                yield _sse("error", {"message": friendly_message, "code": code})
-                return
+        try:
+            while True:
+                try:
+                    kind, value = events.get(timeout=_HEARTBEAT_SECONDS)
+                except queue.Empty:
+                    yield ": keep-alive\n\n"  # a write to a closed connection ends this generator (see finally)
+                    continue
+                if kind == "step":
+                    yield _sse("step", value)
+                elif kind == "token":
+                    yield _sse("token", {"text": value})
+                elif kind == "done":
+                    if not value.get("streamed"):
+                        for chunk in _typewriter_chunks(value.get("content") or ""):
+                            yield _sse("token", {"text": chunk})
+                            time.sleep(_STREAM_CHUNK_DELAY_SECONDS)
+                    finished = True
+                    yield _sse("message", value)
+                    return
+                elif kind == "cancelled":
+                    yield _sse("error", {"message": "That answer was stopped.", "code": "cancelled"})
+                    return
+                else:
+                    finished = True  # nothing is saved for a failed turn anyway
+                    friendly_message, _status, code = resolve_orchestrator_error(value)
+                    yield _sse("error", {"message": friendly_message, "code": code})
+                    return
+        finally:
+            # Normal end, or the page went away (Stop, closed tab): either way nothing more should run, and an
+            # unfinished turn must not be saved - the tombstone covers a worker that is just about to write it.
+            cancel.set()
+            if not finished:
+                history.cancel_turn(user_id, turn_id)
+            _end_turn(user_id, turn_id, cancel)
 
     response = Response(stream_with_context(generate()), mimetype="text/event-stream")
     response.headers["Cache-Control"] = "no-cache"
     response.headers["X-Accel-Buffering"] = "no"  # disable proxy buffering (e.g. nginx) so events arrive live
     return response
+
+
+@app.route("/chat/cancel", methods=["POST"])
+def chat_cancel():
+    """Stop: {"turn_id"}. Ends that turn if it is still running here, removes it from the history if it was
+    already saved, and leaves a tombstone so it is never saved later (a Worker may still be finishing it)."""
+    user_id = get_user_id()
+    turn_id = json_object().get("turn_id")
+    if not isinstance(turn_id, str) or not _TURN_ID_RE.match(turn_id):
+        raise ApiError("That turn id isn't valid.", 400, "invalid_field")
+    with _active_lock:
+        event = _active_turns.get((user_id, turn_id))
+    if event is not None:
+        event.set()
+    history.cancel_turn(user_id, turn_id)
+    return jsonify({"cancelled": True})
+
+
+@app.route("/chat/history", methods=["GET"])
+def chat_history():
+    """Exactly what the model remembers of this browser's conversation, so the page can show it after a reload."""
+    return jsonify({"messages": history.transcript(get_user_id())})
+
+
+@app.route("/chat/rewind", methods=["POST"])
+def chat_rewind():
+    """Regenerate / Edit & resend: {"before_id": <message id>} forgets that message and everything after it."""
+    before_id = json_object().get("before_id")
+    if not isinstance(before_id, int) or isinstance(before_id, bool) or before_id < 0:
+        raise ApiError("'before_id' must be a message id.", 400, "invalid_field")
+    removed = history.rewind(get_user_id(), before_id)
+    return jsonify({"removed": removed})
+
+
+_FOLLOWUP_PROMPT = (
+    "Suggest three short follow-up questions the user might ask next, based on the conversation below. "
+    "Each under 70 characters, phrased as the user would type them, no numbering. "
+    "Reply with only a JSON array of three strings."
+)
+_MAX_FOLLOWUP_CHARS = 90
+
+
+def _parse_followups(text: str) -> list[str]:
+    """Three suggestions from the model's reply: a JSON array if it sent one, else its non-empty lines."""
+    text = (text or "").strip()
+    items: list = []
+    match = re.search(r"\[.*\]", text, re.S)
+    if match:
+        try:
+            items = json.loads(match.group(0))
+        except ValueError:
+            items = []
+    if not isinstance(items, list) or not items:
+        items = [line for line in text.splitlines() if line.strip()]
+    out: list[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        clean = re.sub(r"^[\s\-*\d.)\"']+|[\s\"']+$", "", item).strip()
+        if 3 <= len(clean) <= _MAX_FOLLOWUP_CHARS and clean not in out:
+            out.append(clean)
+    return out[:3]
+
+
+@app.route("/chat/followups", methods=["POST"])
+def chat_followups():
+    """Three suggested next questions for the latest answer (one small model call, no tools)."""
+    if not Config.FOLLOWUP_SUGGESTIONS:
+        return jsonify({"suggestions": []})
+    user_id = get_user_id()
+    recent = history.get(user_id)[-4:]
+    if not recent or recent[-1]["role"] != "assistant":
+        return jsonify({"suggestions": []})
+    resolver = request_provider_resolver()
+    transcript = "\n\n".join(f"{m['role'].upper()}: {m['content'][:1500]}" for m in recent)
+    try:
+        result = resolver().chat([
+            {"role": "system", "content": _FOLLOWUP_PROMPT},
+            {"role": "user", "content": transcript},
+        ])
+    except Exception as exc:  # noqa: BLE001 - suggestions are optional; never an error the person has to see
+        app.logger.info("Follow-up suggestions skipped (%s).", type(exc).__name__)
+        return jsonify({"suggestions": []})
+    return jsonify({"suggestions": _parse_followups(result.content or "")})
 
 
 @app.route("/chat/reset", methods=["POST"])
@@ -603,8 +841,6 @@ def chat_reset():
     history.reset(get_user_id())
     return jsonify({"cleared": True})
 
-
-# ---- Document RAG API ----
 
 @app.route("/documents/upload", methods=["POST"])
 def upload_document():
@@ -623,10 +859,14 @@ def upload_document():
         raise ApiError(f"File is too large - the limit is {max_mb} MB.", 413, "too_large")
 
     try:
-        document, created = rag_pipeline.ingest_with_status(user_id, file_storage.filename, file_bytes)
+        semantic = request_embedder()
+        document, created = rag_pipeline.ingest_with_status(user_id, file_storage.filename, file_bytes, semantic=semantic)
         # Identical content is not indexed twice: the existing document comes
         # back (200, duplicate=true) instead of a new one (201).
-        return jsonify({"document": document.to_dict(), "duplicate": not created}), (201 if created else 200)
+        body = {"document": document.to_dict(), "duplicate": not created}
+        if created and semantic is not None and not document.semantic_model:
+            body["notice"] = "Indexed for keyword search only (meaning-based search wasn't available)."
+        return jsonify(body), (201 if created else 200)
     except RAGIngestionError as exc:
         raise ApiError(str(exc), 400, "upload_rejected") from None
     except Exception:  # noqa: BLE001

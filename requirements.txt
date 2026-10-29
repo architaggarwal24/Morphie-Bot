@@ -1,0 +1,7 @@
+# Local development / self-hosting (the Cloudflare Worker uses pyproject.toml instead).
+flask>=3.0,<4
+python-dotenv>=1.0,<2
+pypdf>=5.0,<6
+python-docx>=1.1,<2
+tzdata
+requests>=2.31,<3

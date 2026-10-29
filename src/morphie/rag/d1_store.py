@@ -9,10 +9,12 @@ import json
 from datetime import datetime, timezone
 
 from ..d1 import D1
-from .vector_store import ChunkInput, DocumentRecord, ScoredChunk, VectorStore, cosine_similarity
+from .vector_store import ChunkInput, DocumentRecord, ScoredChunk, SemanticQuery, VectorStore, score_rows
 
-# D1 allows at most 100 bound parameters per statement; a chunk row binds 7.
-_ROWS_PER_INSERT = 14
+# D1 allows at most 100 bound parameters per statement; a chunk row binds 8.
+_ROWS_PER_INSERT = 12
+# ...and rows carrying meaning-based vectors are large, so those go in smaller statements.
+_ROWS_PER_INSERT_SEMANTIC = 4
 
 
 def _now_iso() -> str:
@@ -29,6 +31,7 @@ class D1VectorStore(VectorStore):
             id=row["id"], workspace_id=row["workspace_id"], filename=row["filename"],
             original_filename=row["original_filename"], content_type=row["content_type"],
             size_bytes=int(row["size_bytes"]), chunk_count=int(row.get("n") or 0), created_at=row["created_at"],
+            semantic_model=row.get("semantic_model"),
         )
 
     _SELECT = (
@@ -38,17 +41,22 @@ class D1VectorStore(VectorStore):
     def add_document(
         self, workspace_id: str, document_id: str, filename: str,
         original_filename: str, content_type: str, size_bytes: int,
-        content_hash: str | None = None,
+        content_hash: str | None = None, semantic_model: str | None = None,
     ) -> DocumentRecord:
         ts = _now_iso()
         self.db.execute(
             "INSERT INTO documents (id, workspace_id, filename, original_filename, content_type, "
-            "size_bytes, created_at, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (document_id, workspace_id, filename, original_filename, content_type, size_bytes, ts, content_hash),
+            "size_bytes, created_at, content_hash, semantic_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (document_id, workspace_id, filename, original_filename, content_type, size_bytes, ts, content_hash, semantic_model),
         )
         return DocumentRecord(
             id=document_id, workspace_id=workspace_id, filename=filename, original_filename=original_filename,
-            content_type=content_type, size_bytes=size_bytes, chunk_count=0, created_at=ts,
+            content_type=content_type, size_bytes=size_bytes, chunk_count=0, created_at=ts, semantic_model=semantic_model,
+        )
+
+    def set_semantic_model(self, workspace_id: str, document_id: str, model_id: str) -> None:
+        self.db.execute(
+            "UPDATE documents SET semantic_model = ? WHERE workspace_id = ? AND id = ?", (model_id, workspace_id, document_id)
         )
 
     def find_document_by_hash(self, workspace_id: str, content_hash: str) -> DocumentRecord | None:
@@ -59,14 +67,18 @@ class D1VectorStore(VectorStore):
 
     def add_chunks(self, workspace_id: str, chunks: list[ChunkInput]) -> None:
         statements = []
-        for start in range(0, len(chunks), _ROWS_PER_INSERT):
-            batch = chunks[start:start + _ROWS_PER_INSERT]
+        per_insert = _ROWS_PER_INSERT_SEMANTIC if any(c.semantic is not None for c in chunks) else _ROWS_PER_INSERT
+        for start in range(0, len(chunks), per_insert):
+            batch = chunks[start:start + per_insert]
             params: list = []
             for c in batch:
-                params += [workspace_id, c.document_id, c.document_name, c.page_number, c.chunk_index, c.text, json.dumps(c.embedding)]
+                params += [
+                    workspace_id, c.document_id, c.document_name, c.page_number, c.chunk_index, c.text,
+                    json.dumps(c.embedding), json.dumps(c.semantic) if c.semantic is not None else None,
+                ]
             statements.append((
-                "INSERT INTO chunks (workspace_id, document_id, document_name, page_number, chunk_index, text, embedding) VALUES "
-                + ", ".join(["(?, ?, ?, ?, ?, ?, ?)"] * len(batch)),
+                "INSERT INTO chunks (workspace_id, document_id, document_name, page_number, chunk_index, text, embedding, semantic) VALUES "
+                + ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?)"] * len(batch)),
                 params,
             ))
         self.db.batch(statements)
@@ -94,30 +106,17 @@ class D1VectorStore(VectorStore):
 
     def search(
         self, workspace_id: str, query_vector: list[float], top_k: int = 5,
-        document_ids: list[str] | None = None,
+        document_ids: list[str] | None = None, semantic: SemanticQuery | None = None,
     ) -> list[ScoredChunk]:
+        # The meaning-based vectors are large: only read them when this search can use them.
+        semantic_col = "c.semantic" if semantic is not None else "NULL AS semantic"
+        select = (
+            f"SELECT c.document_id, c.document_name, c.page_number, c.chunk_index, c.text, c.embedding, {semantic_col}, "
+            "d.semantic_model FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.workspace_id = ?"
+        )
         if document_ids:
             placeholders = ",".join("?" * len(document_ids))
-            rows = self.db.query(
-                "SELECT document_id, document_name, page_number, chunk_index, text, embedding FROM chunks "
-                f"WHERE workspace_id = ? AND document_id IN ({placeholders})",
-                [workspace_id, *document_ids],
-            )
+            rows = self.db.query(select + f" AND c.document_id IN ({placeholders})", [workspace_id, *document_ids])
         else:
-            rows = self.db.query(
-                "SELECT document_id, document_name, page_number, chunk_index, text, embedding FROM chunks WHERE workspace_id = ?",
-                (workspace_id,),
-            )
-        scored: list[ScoredChunk] = []
-        for row in rows:
-            try:
-                vector = json.loads(row["embedding"])
-            except (ValueError, TypeError):
-                continue
-            scored.append(ScoredChunk(
-                document_id=row["document_id"], document_name=row["document_name"],
-                page_number=row["page_number"], chunk_index=int(row["chunk_index"]),
-                text=row["text"], score=cosine_similarity(query_vector, vector),
-            ))
-        scored.sort(key=lambda c: c.score, reverse=True)
-        return scored[:top_k]
+            rows = self.db.query(select, (workspace_id,))
+        return score_rows(rows, query_vector, semantic)[:top_k]

@@ -177,6 +177,12 @@ def _build_config_class() -> type:
         OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
         # Ollama runs locally and needs no API key.
         OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        # Lets visitors pick "Custom URL" in Settings: any OpenAI-compatible server (LM Studio, vLLM, a gateway).
+        # Off by default: a visitor-chosen URL makes this server send requests wherever the visitor says (SSRF),
+        # so only turn it on for a deployment you alone use (e.g. on your own machine).
+        ALLOW_CUSTOM_LLM_URL = _env_bool("ALLOW_CUSTOM_LLM_URL", False)
+        # After each answer, ask the model for three short follow-up questions (one small extra call).
+        FOLLOWUP_SUGGESTIONS = _env_bool("FOLLOWUP_SUGGESTIONS", True)
 
         # ---- Agent / tool calling ----
         # Hard cap on tool round-trips the agent takes in a single turn, to
@@ -196,6 +202,9 @@ def _build_config_class() -> type:
         MAX_CONTEXT_MESSAGES = _env_int("MAX_CONTEXT_MESSAGES", 20, minimum=1)
 
         # ---- Document RAG ----
+        # Also index documents by meaning, with the visitor's own provider's embeddings (OpenAI, Mistral,
+        # Ollama). Keyword search always works; this only adds to it. false = keyword search only.
+        RAG_SEMANTIC_SEARCH = _env_bool("RAG_SEMANTIC_SEARCH", True)
         # Where uploaded documents and the vector store are persisted, kept
         # out of application code and never committed (see .gitignore).
         RAG_UPLOAD_DIR = os.getenv("RAG_UPLOAD_DIR", "data/documents")
@@ -248,7 +257,7 @@ WORKER_ENV_NAMES = (
     "LLM_PROVIDER", "LLM_MODEL", "MISTRAL_API_KEY", "OPENAI_API_KEY", "OLLAMA_BASE_URL", "MAX_TOOL_CALLS",
     "TAVILY_API_KEY", "MAX_CONTEXT_MESSAGES", "RAG_UPLOAD_DIR", "RAG_VECTOR_STORE_PATH", "RAG_MAX_UPLOAD_SIZE_MB",
     "RAG_MAX_CHUNKS_PER_DOCUMENT", "RAG_CHUNK_SIZE", "RAG_CHUNK_OVERLAP", "RAG_TOP_K", "RAG_MIN_SCORE",
-    "RAG_LOCAL_EMBEDDING_DIM",
+    "RAG_LOCAL_EMBEDDING_DIM", "RAG_SEMANTIC_SEARCH", "ALLOW_CUSTOM_LLM_URL", "FOLLOWUP_SUGGESTIONS",
 )
 
 

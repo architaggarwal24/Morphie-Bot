@@ -83,8 +83,9 @@ class D1:
 class D1ConversationHistory:
     """Short-term chat context, kept in D1 because a Worker has no memory that outlives a request.
 
-    Same interface as morphie.history.ConversationHistory. Each browser keeps its newest `max_messages`;
-    rows older than `ttl_days` are swept occasionally so abandoned sessions don't pile up.
+    Same interface as morphie.history.ConversationHistory (including turns, Stop tombstones and rewind). Each
+    browser keeps its newest `max_messages`; rows older than `ttl_days` are swept occasionally so abandoned
+    sessions don't pile up.
     """
 
     def __init__(self, db: D1, max_messages: int = 20, ttl_days: int = 30, sweep_probability: float = 0.02):
@@ -93,30 +94,93 @@ class D1ConversationHistory:
         self.ttl_seconds = max(1, ttl_days) * 86400
         self.sweep_probability = sweep_probability
 
-    def get(self, user_id: str) -> list[dict]:
-        rows = self.db.query(
-            "SELECT role, content FROM ("
-            "  SELECT id, role, content FROM conversation_messages WHERE user_id = ? ORDER BY id DESC LIMIT ?"
+    def _window(self, user_id: str) -> list[dict]:
+        return self.db.query(
+            "SELECT id, role, content, meta FROM ("
+            "  SELECT id, role, content, meta FROM conversation_messages WHERE user_id = ? ORDER BY id DESC LIMIT ?"
             ") ORDER BY id ASC",
             (user_id, self.max_messages),
         )
-        return [{"role": r["role"], "content": r["content"]} for r in rows]
 
-    def append(self, user_id: str, role: str, content: str) -> None:
-        statements: list[tuple[str, Iterable[Any]]] = [
-            (
-                "INSERT INTO conversation_messages (user_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-                (user_id, role, content, int(time.time())),
-            ),
-            (
-                "DELETE FROM conversation_messages WHERE user_id = ? AND id <= ("
-                "  SELECT id FROM conversation_messages WHERE user_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?)",
-                (user_id, user_id, self.max_messages),
-            ),
-        ]
+    def get(self, user_id: str) -> list[dict]:
+        return [{"role": r["role"], "content": r["content"]} for r in self._window(user_id)]
+
+    def transcript(self, user_id: str) -> list[dict]:
+        out = []
+        for r in self._window(user_id):
+            try:
+                meta = json.loads(r.get("meta") or "{}")
+            except ValueError:
+                meta = {}
+            out.append({"id": int(r["id"]), "role": r["role"], "content": r["content"], "meta": meta if isinstance(meta, dict) else {}})
+        return out
+
+    def _insert(self, user_id: str, role: str, content: str, turn_id: str | None, meta: dict | None):
+        return (
+            "INSERT INTO conversation_messages (user_id, role, content, created_at, turn_id, meta) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, role, content, int(time.time()), turn_id, json.dumps(meta) if meta else None),
+        )
+
+    def _trim(self, user_id: str) -> list[tuple[str, Iterable[Any]]]:
+        statements: list[tuple[str, Iterable[Any]]] = [(
+            "DELETE FROM conversation_messages WHERE user_id = ? AND id <= ("
+            "  SELECT id FROM conversation_messages WHERE user_id = ? ORDER BY id DESC LIMIT 1 OFFSET ?)",
+            (user_id, user_id, self.max_messages),
+        )]
         if random.random() < self.sweep_probability:
-            statements.append(("DELETE FROM conversation_messages WHERE created_at < ?", (int(time.time()) - self.ttl_seconds,)))
-        self.db.batch(statements)
+            cutoff = int(time.time()) - self.ttl_seconds
+            statements.append(("DELETE FROM conversation_messages WHERE created_at < ?", (cutoff,)))
+            statements.append(("DELETE FROM cancelled_turns WHERE created_at < ?", (cutoff,)))
+        return statements
+
+    def append(self, user_id: str, role: str, content: str, *, turn_id: str | None = None, meta: dict | None = None) -> int:
+        sql, params = self._insert(user_id, role, content, turn_id, meta)
+        rows = self.db.query(sql + " RETURNING id", params)
+        self.db.batch(self._trim(user_id))
+        return int(rows[0]["id"]) if rows else 0
+
+    def _insert_unless_cancelled(self, user_id: str, role: str, content: str, turn_id: str | None, meta: dict | None) -> int | None:
+        """One message, written only if this turn has no Stop tombstone - checked in the same statement, so a Stop
+        that lands at any moment either removes the row (cancel_turn's DELETE) or prevents it (this NOT EXISTS)."""
+        rows = self.db.query(
+            "INSERT INTO conversation_messages (user_id, role, content, created_at, turn_id, meta) "
+            "SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS ("
+            "  SELECT 1 FROM cancelled_turns WHERE user_id = ? AND turn_id = ?) RETURNING id",
+            (user_id, role, content, int(time.time()), turn_id, json.dumps(meta) if meta else None, user_id, turn_id or ""),
+        )
+        return int(rows[0]["id"]) if rows else None
+
+    def append_turn(
+        self, user_id: str, turn_id: str | None, user_text: str, assistant_text: str, meta: dict | None = None,
+    ) -> tuple[int, int] | None:
+        user_msg = self._insert_unless_cancelled(user_id, "user", user_text, turn_id, None)
+        if user_msg is None:
+            return None
+        bot_msg = self._insert_unless_cancelled(user_id, "assistant", assistant_text, turn_id, meta)
+        if bot_msg is None:  # Stop arrived in between: don't leave half a turn
+            self.db.execute("DELETE FROM conversation_messages WHERE user_id = ? AND id = ?", (user_id, user_msg))
+            return None
+        self.db.batch(self._trim(user_id))
+        return user_msg, bot_msg
+
+    def is_cancelled(self, user_id: str, turn_id: str | None) -> bool:
+        if not turn_id:
+            return False
+        return bool(self.db.query(
+            "SELECT 1 AS x FROM cancelled_turns WHERE user_id = ? AND turn_id = ? LIMIT 1", (user_id, turn_id)
+        ))
+
+    def cancel_turn(self, user_id: str, turn_id: str) -> None:
+        self.db.batch([
+            ("INSERT OR IGNORE INTO cancelled_turns (user_id, turn_id, created_at) VALUES (?, ?, ?)",
+             (user_id, turn_id, int(time.time()))),
+            ("DELETE FROM conversation_messages WHERE user_id = ? AND turn_id = ?", (user_id, turn_id)),
+        ])
+
+    def rewind(self, user_id: str, before_id: int) -> int:
+        return self.db.execute(
+            "DELETE FROM conversation_messages WHERE user_id = ? AND id >= ?", (user_id, int(before_id))
+        )
 
     def reset(self, user_id: str) -> None:
         self.db.execute("DELETE FROM conversation_messages WHERE user_id = ?", (user_id,))

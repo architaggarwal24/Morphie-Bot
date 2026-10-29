@@ -1,3 +1,4 @@
+import re
 import io
 
 import app as app_module
@@ -32,15 +33,18 @@ def _install_fresh_rag_pipeline(monkeypatch, tmp_path):
     return pipeline
 
 
-def test_home_route_renders_the_chat_and_documents_ui_only():
+def test_home_route_serves_the_built_chat_and_documents_ui_only():
     client = app_module.app.test_client()
     res = client.get("/")
     assert res.status_code == 200
-    assert b"MORPHIE" in res.data
-    assert b'id="docsPanel"' in res.data
+    assert b"<title>Morphie-Bot</title>" in res.data
+    assert b'<div id="root"></div>' in res.data
+    script = re.search(rb'src="(/assets/[^"]+\.js)"', res.data).group(1).decode()
+    bundle = client.get(script)
+    assert bundle.status_code == 200 and b"docsPanel" in bundle.data
     # The parent project deliberately ships no design studio, memory panel or key-entry UI.
     for gone in (b"previewPanel", b"memoryPanel", b"providerPanel"):
-        assert gone not in res.data
+        assert gone not in res.data and gone not in bundle.data
 
 
 def test_greeting_shortcut_skips_the_llm():

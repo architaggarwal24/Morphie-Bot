@@ -19,6 +19,7 @@ show.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -35,6 +36,8 @@ from .loaders import (
 )
 from .retriever import DocumentRetriever
 from .vector_store import ChunkInput, DocumentRecord, ScoredChunk, VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 class RAGIngestionError(Exception):
@@ -73,12 +76,16 @@ class RAGPipeline:
         return self.ingest_with_status(workspace_id, original_filename, file_bytes)[0]
 
     def ingest_with_status(
-        self, workspace_id: str, original_filename: str, file_bytes: bytes
+        self, workspace_id: str, original_filename: str, file_bytes: bytes, semantic: EmbeddingProvider | None = None,
     ) -> tuple[DocumentRecord, bool]:
         """Ingest a file. Returns (document, created). Uploading content this
         workspace already has returns the existing document with created=False
         and does no parsing, embedding, or storage - re-indexing identical
-        bytes would cost embedding calls and only produce duplicate search hits."""
+        bytes would cost embedding calls and only produce duplicate search hits.
+
+        `semantic`, if given, also embeds every chunk by meaning (the visitor's own provider). If that fails for
+        any reason the document is still indexed, for keyword search only - `last_semantic_error` says why."""
+        self.last_semantic_error: str | None = None
         safe_name = self._sanitize_filename(original_filename)
         extension = self._extract_extension(safe_name)
         if extension not in SUPPORTED_EXTENSIONS:
@@ -146,6 +153,10 @@ class RAGPipeline:
                 content_hash=content_hash,
             )
 
+            meaning = self._semantic_vectors(semantic, [text for _, text in pieces])
+            if meaning is not None:
+                self.vector_store.set_semantic_model(workspace_id, document_id, semantic.model_id)
+
             chunk_inputs: list[ChunkInput] = []
             for start in range(0, len(pieces), self.EMBED_BATCH_SIZE):
                 batch = pieces[start:start + self.EMBED_BATCH_SIZE]
@@ -155,6 +166,7 @@ class RAGPipeline:
                         ChunkInput(
                             document_id=document_id, document_name=safe_name, page_number=page_number,
                             chunk_index=start + offset, text=text, embedding=embedding,
+                            semantic=meaning[start + offset] if meaning is not None else None,
                         )
                     )
 
@@ -168,6 +180,23 @@ class RAGPipeline:
             raise
 
         return self.vector_store.get_document(workspace_id, document_id), True
+
+    def _semantic_vectors(self, semantic: EmbeddingProvider | None, texts: list[str]) -> list[list[float]] | None:
+        """Meaning-based vectors for every chunk, or None (keyword search only) if there is no embedder or it fails."""
+        if semantic is None:
+            return None
+        vectors: list[list[float]] = []
+        try:
+            for start in range(0, len(texts), self.EMBED_BATCH_SIZE):
+                vectors.extend(semantic.embed_batch(texts[start:start + self.EMBED_BATCH_SIZE]))
+        except Exception as exc:  # noqa: BLE001 - any failure just means keyword search for this document
+            logger.warning("Semantic embedding failed (%s); indexing for keyword search only.", type(exc).__name__)
+            self.last_semantic_error = str(exc) if str(exc) else "the embedding request failed"
+            return None
+        if len(vectors) != len(texts):
+            self.last_semantic_error = "the embedding service returned the wrong number of vectors"
+            return None
+        return vectors
 
     # ---- management ----
 
@@ -188,9 +217,9 @@ class RAGPipeline:
 
     def search(
         self, workspace_id: str, query: str, top_k: int | None = None,
-        document_ids: list[str] | None = None,
+        document_ids: list[str] | None = None, semantic: EmbeddingProvider | None = None,
     ) -> list[ScoredChunk]:
-        return self.retriever.retrieve(workspace_id, query, top_k=top_k, document_ids=document_ids)
+        return self.retriever.retrieve(workspace_id, query, top_k=top_k, document_ids=document_ids, semantic=semantic)
 
     # ---- internals ----
 

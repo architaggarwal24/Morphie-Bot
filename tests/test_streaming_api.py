@@ -30,7 +30,8 @@ def parse_sse(raw: bytes) -> list[tuple[str, dict]]:
                 event_name = line[len("event: "):]
             elif line.startswith("data: "):
                 data = json.loads(line[len("data: "):])
-        events.append((event_name, data))
+        if event_name is not None:  # ":" lines are heartbeats
+            events.append((event_name, data))
     return events
 
 
@@ -76,6 +77,10 @@ def test_the_final_message_event_is_byte_for_byte_the_same_json_chat_would_retur
     _, events = _stream(client, message="what is 6 times 7?")
     streamed = events[-1][1]
 
+    # Identical apart from what names this particular turn (each request is its own turn)
+    for payload in (streamed, normal):
+        assert payload.pop("turn")["id"]
+        payload.pop("streamed")
     assert streamed == normal
 
 
@@ -84,7 +89,7 @@ def test_tool_calls_appear_as_live_step_events_in_order(client, monkeypatch):
         tool_call_result("c1", "calculator", '{"expression": "1+1"}'), text_result("It's 2."),
     ]))
     _, events = _stream(client, message="what is 1+1?")
-    steps = [data for kind, data in events if kind == "step"]
+    steps = [{k: v for k, v in data.items() if k in ("type", "tool", "success")} for kind, data in events if kind == "step"]
     assert steps == [
         {"type": "thinking"},
         {"type": "tool_call", "tool": "calculator"}, {"type": "tool_result", "tool": "calculator", "success": True},

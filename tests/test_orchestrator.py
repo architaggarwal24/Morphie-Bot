@@ -97,7 +97,9 @@ def test_documents_are_searched_and_cited_with_real_sources(orchestrator, parts)
     ])
     out = _chat(orchestrator, provider, "What does my resume say about Python?")
     assert out["tool_used"] == "search_documents"
-    assert out["sources"] == [{"document": "resume.txt", "page": None}]
+    assert [(x["n"], x["document"], x["page"]) for x in out["sources"]] == [(1, "resume.txt", None)]
+    assert "Five years of Python" in out["sources"][0]["snippet"]                # the matched text, for the popover
+    assert "[1] (source: resume.txt)" in provider.calls[1][0][-1]["content"]   # the model saw the same number
     assert "Five years of Python" in provider.calls[1][0][-1]["content"]      # the model was handed the real text
 
 
@@ -139,6 +141,8 @@ def test_on_step_is_optional_and_the_default_changes_nothing(orchestrator):
                                            provider=provider, on_step=events.append)
     provider2 = ScriptedProvider([text_result("Hi!")])
     without = orchestrator.handle_chat(user_id="b", text="hello there", document_ids=None, provider=provider2)
+    for payload in (with_events, without):
+        payload.pop("turn")
     assert with_events == without and events == [{"type": "thinking"}]
 
 
@@ -156,7 +160,25 @@ def test_chat_turn_reports_thinking_and_tool_events(orchestrator):
     events = []
     orchestrator.handle_chat(user_id="u", text="what's 1+1?", document_ids=None,
                              provider=provider, on_step=events.append)
-    assert events == [
+    assert [{k: v for k, v in e.items() if k in ("type", "tool", "success")} for e in events] == [
         {"type": "thinking"}, {"type": "tool_call", "tool": "calculator"},
         {"type": "tool_result", "tool": "calculator", "success": True}, {"type": "thinking"},
     ]
+
+
+def test_a_turn_is_saved_under_its_id_with_sources_and_tools(orchestrator, parts):
+    out = orchestrator.handle_chat(user_id=USER, text="what is 1+1?", document_ids=None, turn_id="turn-abc123",
+                                   provider=ScriptedProvider([tool_call_result("c1", "calculator", '{"expression": "1+1"}'), text_result("2")]))
+    transcript = parts["history"].transcript(USER)
+    assert [m["id"] for m in transcript] == [out["turn"]["user_message_id"], out["turn"]["assistant_message_id"]]
+    assert transcript[1]["meta"]["tools"] == [{"tool": "calculator", "success": True}]
+
+
+def test_a_cancelled_turn_is_never_saved(orchestrator, parts):
+    import pytest
+    from morphie.agent.orchestrator import TurnCancelled
+    parts["history"].cancel_turn(USER, "turn-stopped1")
+    with pytest.raises(TurnCancelled):
+        orchestrator.handle_chat(user_id=USER, text="long question", document_ids=None, turn_id="turn-stopped1",
+                                 provider=ScriptedProvider([text_result("late answer")]))
+    assert parts["history"].get(USER) == []

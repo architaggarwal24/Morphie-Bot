@@ -67,6 +67,16 @@ class WorkersResponse:
         if self.status_code >= 400:
             raise HTTPError(f"HTTP {self.status_code}")
 
+    def iter_lines(self, decode_unicode: bool = False):
+        """Same as requests' streaming iter_lines. A Python Worker can't stream its own response anyway (the WSGI
+        adapter sends it whole), so the body was read in full and is split here - on newlines only (str.splitlines
+        would also split inside text on characters like U+2028)."""
+        for line in self.text.split("\n"):
+            yield line.rstrip("\r")
+
+    def close(self) -> None:
+        pass
+
 
 if _requests is None:  # pragma: no cover
     Response = WorkersResponse
@@ -99,7 +109,10 @@ def set_transport(transport: Any) -> None:
     _transport = transport
 
 
-def workers_post(url: str, json: Any = None, headers: dict | None = None, timeout: float | None = None, data: Any = None) -> WorkersResponse:
+def workers_post(
+    url: str, json: Any = None, headers: dict | None = None, timeout: float | None = None, data: Any = None,
+    stream: bool = False, allow_redirects: bool = True,
+) -> WorkersResponse:
     headers = dict(headers or {})
     body: str | None
     if json is not None:
@@ -120,8 +133,28 @@ def workers_post(url: str, json: Any = None, headers: dict | None = None, timeou
     return WorkersResponse(status, text, response_headers)
 
 
+def decoded_lines(response):
+    """A streamed body as text lines. Bytes are split on newlines first and then decoded as UTF-8, so neither
+    requests' ISO-8859-1 guess for text/event-stream nor a multi-byte character split across chunks can mangle
+    the text."""
+    for raw in response.iter_lines():
+        if isinstance(raw, bytes):
+            yield raw.decode("utf-8", "replace").rstrip("\r")
+        else:
+            yield raw
+
+
+def content_type(response) -> str:
+    headers = getattr(response, "headers", None) or {}
+    try:
+        return str(headers.get("Content-Type") or headers.get("content-type") or "").lower()
+    except AttributeError:
+        return ""
+
+
 def post(*args, **kwargs):
-    """requests.post, or fetch() on Workers. `requests` is resolved at call time on purpose."""
+    """requests.post, or fetch() on Workers. `requests` is resolved at call time on purpose. `stream=True` gives
+    a response whose `iter_lines()` yields lines as they arrive (on Workers: once the body is complete)."""
     if IS_WORKERS:
         return workers_post(*args, **kwargs)
     return _requests.post(*args, **kwargs)
