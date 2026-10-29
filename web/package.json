@@ -2,6 +2,8 @@
   "name": "morphie-bot-web",
   "private": true,
   "version": "2.0.0",
+  "license": "MIT",
+  "author": "Archit Aggarwal",
   "type": "module",
   "scripts": {
     "dev": "vite",

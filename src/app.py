@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from flask import Flask, Response, request, jsonify, send_from_directory, session, stream_with_context
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import HTTPException, NotFound
 
 from config import Config, apply_worker_env
 from morphie.agent.orchestrator import AgentOrchestrator, TurnCancelled
@@ -459,9 +459,19 @@ def assets(filename):
     return send_from_directory(PUBLIC_DIR / "assets", filename, max_age=31536000)
 
 
-@app.route("/favicon.svg")
-def favicon():
-    return send_from_directory(PUBLIC_DIR, "favicon.svg", max_age=86400)
+# The icons and web manifest that live at the site root (Cloudflare serves the same files from public/).
+_ROOT_FILES = {
+    "favicon.ico", "favicon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png",
+    "icon-maskable-512.png", "site.webmanifest",
+}
+
+
+@app.route("/<name>")
+def root_file(name):
+    if name not in _ROOT_FILES:
+        raise NotFound()
+    mimetype = "application/manifest+json" if name.endswith(".webmanifest") else None
+    return send_from_directory(PUBLIC_DIR, name, max_age=86400, mimetype=mimetype)
 
 
 @app.route("/status", methods=["GET"])

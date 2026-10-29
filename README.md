@@ -1,5 +1,7 @@
 # Morphie-Bot
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-8b5cf6.svg)](LICENSE)
+
 > A small, readable AI assistant you can run in five minutes: **chat**, **a basic tool-using agent**, and **document Q&A (RAG)**, built with Flask and a React + Motion web UI.
 
 Morphie-Bot is the **parent project**. It stays deliberately small so the core ideas are easy to read end to end: how a model calls tools, how documents become searchable, how a chat UI shows an agent working. Its more ambitious descendant, **[Morphie](https://github.com/architaggarwal24/morphie)**, takes the agent idea much further (see [Morphie-Bot → Morphie](#morphie-bot--morphie)).
@@ -313,3 +315,7 @@ Morphie-Bot is the foundation; **[Morphie](https://github.com/architaggarwal24/m
 | Extras | – | Long-term memory, Design studio (HTML/React export), searchable chat history |
 
 Start here to understand the fundamentals; move to Morphie for the complete experience.
+
+## License
+
+[MIT](LICENSE) © 2026 Archit Aggarwal. Use it, change it, ship it; keep the copyright and license notice.

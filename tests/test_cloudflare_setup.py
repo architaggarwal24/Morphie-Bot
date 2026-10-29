@@ -95,3 +95,25 @@ def test_nothing_in_src_needs_threads_on_the_worker_path():
     # The only Thread use is the non-Workers branch of /chat/stream.
     assert source.count("threading.Thread(") == 1
     assert source.index("if IS_WORKERS:", source.index("def generate")) < source.index("threading.Thread(")
+
+
+def test_the_icon_set_and_manifest_are_built_linked_and_served():
+    import app as app_module
+
+    html = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
+    for href in ("/favicon.ico", "/favicon.svg", "/apple-touch-icon.png", "/site.webmanifest"):
+        assert f'href="{href}"' in html, href
+    client = app_module.app.test_client()
+    for name in ("favicon.ico", "favicon.svg", "apple-touch-icon.png", "icon-192.png", "icon-512.png", "icon-maskable-512.png"):
+        res = client.get("/" + name)
+        assert res.status_code == 200 and res.data == (ROOT / "public" / name).read_bytes(), name
+    manifest = client.get("/site.webmanifest")
+    assert manifest.mimetype == "application/manifest+json"
+    assert {i["src"] for i in json.loads(manifest.data)["icons"]} <= {"/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"}
+    assert client.get("/secrets.txt").status_code == 404 and client.get("/.env").status_code == 404
+
+
+def test_the_license_is_mit_and_declared_everywhere():
+    assert (ROOT / "LICENSE").read_text(encoding="utf-8").startswith("MIT License")
+    assert tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["license"] == "MIT"
+    assert json.loads((ROOT / "web" / "package.json").read_text(encoding="utf-8"))["license"] == "MIT"
