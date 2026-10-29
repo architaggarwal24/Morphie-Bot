@@ -26,7 +26,7 @@ You need **Python 3.10 or newer** (developed and tested on 3.12) and an API key 
 git clone https://github.com/architaggarwal24/morphie-bot.git
 cd morphie-bot
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 cp .env.example .env          # then edit .env (see below)
 python src/app.py
 ```
@@ -37,7 +37,7 @@ git clone https://github.com/architaggarwal24/morphie-bot.git
 cd morphie-bot
 python -m venv .venv
 .venv\Scripts\Activate.ps1     # if blocked: Set-ExecutionPolicy -Scope Process Bypass
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 copy .env.example .env         # then edit .env (see below)
 python src/app.py
 ```

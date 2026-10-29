@@ -4,7 +4,8 @@ version = "1.0.0"
 description = "Morphie-Bot: chat, a small tool-using agent and document Q&A, on Flask. Runs locally or on Cloudflare Workers."
 requires-python = ">=3.12"
 # What the *Worker* needs (pure-Python or Pyodide-provided). `requests` is deliberately absent: it cannot open
-# sockets in Pyodide, so morphie/net.py uses fetch() there. For local development use requirements.txt.
+# sockets in Pyodide, so morphie/net.py uses fetch() there. For local development use requirements-local.txt
+# (not requirements.txt: pywrangler refuses to deploy while a file with that name exists).
 dependencies = [
     "flask>=3.0,<4",
     "python-dotenv>=1.0,<2",

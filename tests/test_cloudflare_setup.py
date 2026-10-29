@@ -48,7 +48,9 @@ def test_worker_dependencies_exclude_packages_that_cannot_run_in_pyodide():
     names = {re.split(r"[<>=!~ ]", d)[0].lower() for d in deps}
     assert {"flask", "pypdf", "python-docx"} <= names
     assert not names & {"requests", "httpx", "mistralai", "aiohttp"}
-    assert "requests" in (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()  # still used for local runs
+    assert "requests" in (ROOT / "requirements-local.txt").read_text(encoding="utf-8").lower()  # still used for local runs
+    # pywrangler deploy aborts if a requirements.txt exists (dependencies must come from pyproject.toml)
+    assert not (ROOT / "requirements.txt").exists()
 
 
 def test_the_d1_migration_creates_every_table_the_app_uses():
